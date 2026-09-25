@@ -33,8 +33,8 @@ AEmulator یک سیستم واقعی اندروید 2.3 تا 4.4 را مستقی
 
 | دستگاه | اندروید | رابط | وضعیت | دانلود |
 |---|:---:|---|---|---|
-| HTC Desire HD | 2.3.3 | HTC Sense | 🟢 کار می‌کند | [آرشیو آمادهٔ درون‌ریزی](https://github.com/uxazu/aemulator/releases/download/v0.0.0.1/HTC_DesireHD_2.3.3_Sense_rootfs.tar.gz) |
-| HTC One M7 | 4.4.2 | Sense 5.5 | 🟢 کار می‌کند | [آرشیو آمادهٔ درون‌ریزی](https://github.com/uxazu/aemulator/releases/download/v0.0.0.1/HTC_One_M7_4.4.2_Sense5.5_rootfs.tar.gz) |
+| HTC Desire HD | 2.3.3 | HTC Sense | 🟢 کار می‌کند | [آرشیو آمادهٔ درون‌ریزی](https://drive.google.com/file/d/1GGOOw60JLXXA5yFbWu9SubTZ_1W1vxjE/view?usp=sharing) |
+| HTC One M7 | 4.4.2 | Sense 5.5 | 🟢 کار می‌کند | [آرشیو آمادهٔ درون‌ریزی](https://drive.google.com/file/d/1Gcz8uD6fAXNt93kqorGHA38TW_bQ12_d/view?usp=drive_link) |
 | Google Galaxy Nexus (takju) | 4.3 | AOSP | 🟢 کار می‌کند — صدا کار می‌کند | [ایمیج کارخانهٔ گوگل](https://dl.google.com/dl/android/aosp/takju-jwr66y-factory-5104ab1d.tgz) |
 | Google Nexus 4 (occam) | 4.4.4 | AOSP | 🟢 کار می‌کند — صدا کار می‌کند | [ایمیج کارخانهٔ گوگل](https://dl.google.com/dl/android/aosp/occam-ktu84p-factory-b6ac3ad6.tgz) |
 | Samsung Galaxy S II (GT-I9100) | 2.3.3 | TouchWiz | 🟢 کار می‌کند — پنجرهٔ خطای Bluetooth | [بستهٔ Odin](https://archive.org/download/i9100xexe/I9100XEKE1.zip) |

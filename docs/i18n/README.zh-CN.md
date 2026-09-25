@@ -31,8 +31,8 @@ AEmulator 直接从固件文件启动真实的 Android 2.3–4.4 系统：Recove
 
 | 设备 | Android | 系统界面 | 状态 | 下载 |
 |---|:---:|---|---|---|
-| HTC Desire HD | 2.3.3 | HTC Sense | 🟢 可用 | [可直接导入的压缩包](https://github.com/uxazu/aemulator/releases/download/v0.0.0.1/HTC_DesireHD_2.3.3_Sense_rootfs.tar.gz) |
-| HTC One M7 | 4.4.2 | Sense 5.5 | 🟢 可用 | [可直接导入的压缩包](https://github.com/uxazu/aemulator/releases/download/v0.0.0.1/HTC_One_M7_4.4.2_Sense5.5_rootfs.tar.gz) |
+| HTC Desire HD | 2.3.3 | HTC Sense | 🟢 可用 | [可直接导入的压缩包](https://drive.google.com/file/d/1GGOOw60JLXXA5yFbWu9SubTZ_1W1vxjE/view?usp=sharing) |
+| HTC One M7 | 4.4.2 | Sense 5.5 | 🟢 可用 | [可直接导入的压缩包](https://drive.google.com/file/d/1Gcz8uD6fAXNt93kqorGHA38TW_bQ12_d/view?usp=drive_link) |
 | Google Galaxy Nexus (takju) | 4.3 | AOSP | 🟢 可用 — 声音正常 | [Google 出厂镜像](https://dl.google.com/dl/android/aosp/takju-jwr66y-factory-5104ab1d.tgz) |
 | Google Nexus 4 (occam) | 4.4.4 | AOSP | 🟢 可用 — 声音正常 | [Google 出厂镜像](https://dl.google.com/dl/android/aosp/occam-ktu84p-factory-b6ac3ad6.tgz) |
 | Samsung Galaxy S II (GT-I9100) | 2.3.3 | TouchWiz | 🟢 可用 — 蓝牙错误弹窗 | [Odin 包](https://archive.org/download/i9100xexe/I9100XEKE1.zip) |
