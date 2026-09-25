@@ -1,0 +1,17 @@
+*.apk
+*_apktool/
+*_jadx/
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+/dist/
+.claude/
+__pycache__/
+
+# ключи подписи — никогда не в репозиторий
+keystore/
+keystore.properties
+*.jks
+*.keystore

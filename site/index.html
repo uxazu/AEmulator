@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AEmulator — classic Android on a modern phone</title>
+<meta name="description" content="AEmulator runs classic Android firmware — HTC Sense, TouchWiz, MIUI, AOSP — on modern phones. Free and open source.">
+<meta name="theme-color" content="#3D5AFE">
+<meta property="og:title" content="AEmulator">
+<meta property="og:description" content="Classic Android firmware on a modern phone. No root, no PC.">
+<meta property="og:image" content="assets/logo.png">
+<link rel="icon" href="assets/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Google+Sans+Display:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..600,0..1,-50..200&display=block">
+<link rel="stylesheet" href="style.css">
+<script>
+  // тема до отрисовки — без вспышки
+  (function () {
+    var t = null; try { t = localStorage.getItem('aemu-theme'); } catch (e) {}
+    document.documentElement.dataset.theme = t || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  })();
+</script>
+</head>
+<body>
+<div class="scroll-progress" aria-hidden="true"></div>
+
+<div class="bg-blobs" aria-hidden="true">
+  <svg class="blob blob--1" viewBox="0 0 200 200"><path d="M43.9,-76.4C56.7,-69.5,66.8,-57.4,74.1,-44C81.4,-30.6,85.8,-15.3,84.6,-0.7C83.4,14,76.5,27.9,67.7,39.9C58.9,51.8,48.2,61.7,36,68.6C23.8,75.5,10.1,79.4,-3.4,84.9C-16.9,90.4,-30.2,97.5,-40.6,92.6C-51,87.7,-58.5,70.8,-65.3,55.8C-72.1,40.8,-78.2,27.7,-80,13.9C-81.8,0.1,-79.2,-14.4,-73.1,-27.5C-67,-40.6,-57.4,-52.3,-45.6,-59.6C-33.8,-66.9,-19.8,-69.8,-4.9,-71.5C10,-73.2,31.1,-83.3,43.9,-76.4Z" transform="translate(100 100)"/></svg>
+  <svg class="blob blob--2" viewBox="0 0 200 200"><path d="M52.3,-70.9C67.4,-60.7,79,-44.6,83.6,-26.9C88.2,-9.3,85.8,9.9,77.9,25.4C70,40.9,56.6,52.7,42,62.1C27.4,71.4,11.7,78.3,-4.5,83.6C-20.7,88.9,-37.4,92.6,-49.6,85.7C-61.8,78.8,-69.5,61.3,-75.4,44.5C-81.3,27.7,-85.4,11.6,-82.6,-3.5C-79.8,-18.6,-70.1,-32.7,-58.2,-43.4C-46.3,-54.1,-32.2,-61.4,-17.8,-70.2C-3.4,-79,12,-89.3,26.4,-86.3C40.8,-83.3,37.2,-81.1,52.3,-70.9Z" transform="translate(100 100)"/></svg>
+  <svg class="blob blob--3" viewBox="0 0 200 200"><path d="M38.1,-64.3C51.8,-57.5,66.6,-50.7,74.5,-39.1C82.4,-27.4,83.3,-11,80.4,4.1C77.5,19.2,70.7,33,60.9,43.9C51.1,54.8,38.2,62.8,24.4,68.4C10.6,74,-4.1,77.2,-18.1,74.3C-32.1,71.4,-45.4,62.4,-56.4,51.2C-67.4,40,-76.1,26.6,-78.6,11.9C-81.1,-2.8,-77.4,-18.8,-69.3,-31.9C-61.2,-45,-48.7,-55.2,-35.4,-62.4C-22.1,-69.6,-8,-73.8,3.3,-78.9C14.6,-84,24.4,-71.1,38.1,-64.3Z" transform="translate(100 100)"/></svg>
+</div>
+
+<div class="nav-wrap">
+  <nav class="nav glass" aria-label="Main">
+    <a class="nav__logo" href="#top" aria-label="AEmulator">
+      <span class="nav__logo-mark"><img class="nav__logo-img" src="assets/logo.png" alt=""></span>
+      <span class="nav__logo-text">AEmulator</span>
+    </a>
+    <div class="nav__links">
+      <a href="#features"><span class="material-symbols-rounded nav__ico">auto_awesome</span><span data-t="feat_title"></span></a>
+      <a href="#firmware"><span class="material-symbols-rounded nav__ico">deployed_code</span><span data-t="fw_title"></span></a>
+      <a href="#start"><span class="material-symbols-rounded nav__ico">rocket_launch</span><span data-t="start_title"></span></a>
+      <a href="#support"><span class="material-symbols-rounded nav__ico">volunteer_activism</span><span data-t="support_title"></span></a>
+    </div>
+    <div class="nav__actions">
+      <div class="lang">
+        <button class="icon-toggle" id="langBtn" aria-haspopup="listbox" aria-expanded="false" aria-label="Language">
+          <span class="material-symbols-rounded">translate</span>
+        </button>
+        <ul class="lang-menu glass" id="langMenu" role="listbox" hidden></ul>
+      </div>
+      <button class="icon-toggle theme-toggle" aria-label="Theme">
+        <span class="material-symbols-rounded theme-toggle__moon">dark_mode</span>
+        <span class="material-symbols-rounded theme-toggle__sun">light_mode</span>
+      </button>
+    </div>
+  </nav>
+</div>
+
+<main>
+  <!-- HERO -->
+  <section class="hero" id="top">
+    <div class="hero__inner">
+      <p class="hero__eyebrow"><span class="material-symbols-rounded">verified</span>open source</p>
+      <h1 class="hero__title">
+        <span class="hero__word">AE</span><span class="hero__word hero__word--accent">mulator<svg class="squiggle" viewBox="0 0 300 20" preserveAspectRatio="none"><path d="M3 12 C 40 2, 70 20, 110 10 S 180 2, 220 11 S 280 18, 297 8" fill="none"/></svg></span>
+      </h1>
+      <p class="hero__subtitle"><span class="typewriter" data-words='["HTC Sense","Samsung TouchWiz","MIUI","AOSP"]'></span><span class="caret"></span></p>
+      <p class="hero__lead" data-t="tagline"></p>
+      <div class="hero__actions">
+        <a class="m3-btn m3-btn--filled ripple tilt" data-link="releases"><span class="material-symbols-rounded">download</span><span data-t="c_download"></span> APK</a>
+        <a class="m3-btn m3-btn--tonal ripple tilt" data-link="repo"><svg class="gh-mark" viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+        <a class="m3-btn m3-btn--outlined ripple tilt" data-link="channel"><span class="material-symbols-rounded">send</span>Telegram</a>
+      </div>
+      <div class="hero__stats">
+        <div class="stat tilt"><span class="stat__num" id="statFw">0</span><span class="stat__label" data-t="s_fw"></span></div>
+        <div class="stat tilt"><span class="stat__num" data-count="18">0</span><span class="stat__label" data-t="s_langs"></span></div>
+        <div class="stat tilt"><span class="stat__num">2.3<small>–</small>4.4</span><span class="stat__label">Android</span></div>
+      </div>
+    </div>
+    <a class="hero__scroll-hint" href="#about" aria-label="Scroll"><span class="material-symbols-rounded">keyboard_double_arrow_down</span></a>
+  </section>
+
+  <!-- бегущая строка -->
+  <div class="marquee" aria-hidden="true">
+    <div class="marquee__track"><div class="marquee__group" id="marquee"></div></div>
+  </div>
+
+  <!-- О ПРОЕКТЕ -->
+  <section class="section" id="about">
+    <div class="about-grid">
+      <div class="phone-card reveal tilt">
+        <div class="phone"><img src="assets/screen-library.png" alt="AEmulator library screen" loading="lazy"></div>
+      </div>
+      <div class="about-text reveal">
+        <span class="section__chip"><span class="material-symbols-rounded">android</span>AEmulator</span>
+        <p class="about-lead" data-t="about"></p>
+        <div class="fact glass tilt">
+          <span class="material-symbols-rounded fact__icon">settings_suggest</span>
+          <div><h4 data-t="how_title"></h4><p data-t="how_text"></p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ВОЗМОЖНОСТИ -->
+  <section class="section section--tinted" id="features">
+    <div class="section__head reveal">
+      <span class="section__chip"><span class="material-symbols-rounded">auto_awesome</span><span data-t="feat_title"></span></span>
+    </div>
+    <div class="skills-grid" id="feats"></div>
+  </section>
+
+  <!-- ПРОШИВКИ -->
+  <section class="section" id="firmware">
+    <div class="section__head reveal">
+      <span class="section__chip section__chip--tert"><span class="material-symbols-rounded">deployed_code</span><span data-t="fw_title"></span></span>
+      <h2 data-t="fw_title"></h2>
+      <p class="section__lead" data-t="fw_intro"></p>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="projects-grid" id="fw"></div>
+    <p class="note reveal"><span class="material-symbols-rounded">info</span><span data-t="fw_legal"></span></p>
+  </section>
+
+  <!-- СТАРТ -->
+  <section class="section section--tinted" id="start">
+    <div class="start-grid">
+      <div>
+        <div class="section__head reveal">
+          <span class="section__chip"><span class="material-symbols-rounded">rocket_launch</span><span data-t="start_title"></span></span>
+          <h2 data-t="start_title"></h2>
+        </div>
+        <ol class="steps" id="steps"></ol>
+      </div>
+      <div>
+        <div class="section__head reveal">
+          <span class="section__chip section__chip--tert"><span class="material-symbols-rounded">checklist</span><span data-t="req_title"></span></span>
+          <h2 data-t="req_title"></h2>
+        </div>
+        <ul class="reqs" id="reqs"></ul>
+        <div class="fact glass reveal tilt">
+          <span class="material-symbols-rounded fact__icon">build</span>
+          <div><h4 data-t="build_title"></h4><p data-t-html="build_text"></p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ПОДДЕРЖКА -->
+  <section class="section" id="support">
+    <div class="cta reveal">
+      <div class="cta__text">
+        <span class="material-symbols-rounded cta__spark">favorite</span>
+        <h2 data-t="support_title"></h2>
+        <p data-t="support_text"></p>
+        <a class="m3-btn m3-btn--light ripple tilt" data-link="donate"><span class="material-symbols-rounded">volunteer_activism</span>dalink.to/uxazu</a>
+      </div>
+      <div class="wallets">
+        <div class="support-card glass tilt">
+          <span class="material-symbols-rounded support-card__icon">payments</span>
+          <div class="support-card__body"><h3>USDT · TRC20</h3><code class="addr" data-cfg="usdt"></code></div>
+          <button class="copy-btn" data-copy-key="usdt" aria-label="Copy"><span class="material-symbols-rounded">content_copy</span></button>
+        </div>
+        <div class="support-card glass tilt">
+          <span class="material-symbols-rounded support-card__icon">diamond</span>
+          <div class="support-card__body"><h3>Toncoin · TON</h3><code class="addr" data-cfg="ton"></code></div>
+          <button class="copy-btn" data-copy-key="ton" aria-label="Copy"><span class="material-symbols-rounded">content_copy</span></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- КОНТАКТЫ -->
+  <section class="section section--contact" id="links">
+    <div class="contact-grid">
+      <a class="contact-card glass reveal tilt" data-link="repo">
+        <span class="contact-card__icon contact-card__gh"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></span>
+        <span class="contact-card__body"><h3>GitHub</h3><p>uxazu/aemulator</p></span>
+        <span class="material-symbols-rounded contact-card__arrow">arrow_outward</span>
+      </a>
+      <a class="contact-card glass reveal tilt" data-link="channel">
+        <span class="contact-card__icon"><span class="material-symbols-rounded">campaign</span></span>
+        <span class="contact-card__body"><h3 data-t="l_channel"></h3><p>@aemulatorofficial</p></span>
+        <span class="material-symbols-rounded contact-card__arrow">arrow_outward</span>
+      </a>
+      <a class="contact-card glass reveal tilt" data-link="author">
+        <span class="contact-card__icon contact-card--tert"><span class="material-symbols-rounded">person</span></span>
+        <span class="contact-card__body"><h3 data-t="l_author"></h3><p>uxazu</p></span>
+        <span class="material-symbols-rounded contact-card__arrow">arrow_outward</span>
+      </a>
+      <a class="contact-card glass reveal tilt" data-link="original">
+        <span class="contact-card__icon contact-card--sec"><span class="material-symbols-rounded">history_edu</span></span>
+        <span class="contact-card__body"><h3 data-t="l_orig"></h3><p>t.me/istratii_tech</p></span>
+        <span class="material-symbols-rounded contact-card__arrow">arrow_outward</span>
+      </a>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <p><span data-t="license_text"></span></p>
+  <p class="footer__small">© AEmulator · <a data-link="author">uxazu</a></p>
+</footer>
+
+<div class="snackbar" id="snackbar" role="status" aria-live="polite"></div>
+
+<script src="config.js"></script>
+<script src="i18n.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

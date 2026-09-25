@@ -1,0 +1,22 @@
+# Ключи строк интерфейса AEmulator. Порядок важен: переводы в langs/*.py идут в том же порядке.
+KEYS = [
+    "channel_vm", "vm_running", "vm_running_hint",
+    "lib_subtitle", "help", "add_firmware", "settings",
+    "delete_title", "delete_text", "delete", "cancel", "name", "save",
+    "storage_title", "storage_text", "allow",
+    "empty_title", "empty_text", "empty_help",
+    "import_failed", "import_running", "import_done", "import_start", "import_ready", "ok",
+    "last_boot", "start", "rename",
+    "help_title", "help_text",
+    "vs_screen", "vs_fixed_2x", "vs_screen_hint", "vs_perf",
+    "vs_gpu", "vs_gpu_sub", "vs_hwui", "vs_hwui_sub", "vs_jit", "vs_jit_sub",
+    "vs_legacy", "vs_legacy_sub", "vs_lowram", "vs_lowram_sub", "vs_proxy", "vs_proxy_sub",
+    "vs_controls", "vs_nav", "vs_nav_sub", "vs_awake", "vs_awake_sub", "vs_single", "vs_single_sub",
+    "vm_booting_short", "menu", "log", "vol_up", "vol_down", "power", "shutdown",
+    "back", "home", "recents", "failed_start", "close", "retry",
+    "st_preparing", "st_booting", "st_stopping", "first_boot_hint", "host", "guest_log",
+    "as_appearance", "as_language", "as_lang_system", "as_theme", "as_theme_system", "as_theme_light", "as_theme_dark",
+    "as_dynamic", "as_dynamic_sub", "as_defaults", "as_defaults_sub",
+    "as_links", "as_site", "as_channel", "as_author", "as_orig", "as_orig_sub", "as_github",
+    "as_support", "as_donate", "as_usdt", "as_ton", "as_copied", "as_version", "as_about",
+]

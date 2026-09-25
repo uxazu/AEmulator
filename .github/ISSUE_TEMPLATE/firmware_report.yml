@@ -1,0 +1,23 @@
+name: Firmware report
+description: Tell us how a firmware runs in AEmulator (works, crashes, hangs)
+labels: ["firmware"]
+body:
+  - type: input
+    id: device
+    attributes: { label: Device and firmware, placeholder: "Samsung Galaxy S III, TouchWiz 4.3 (I9300XXUGNJ2)" }
+    validations: { required: true }
+  - type: input
+    id: link
+    attributes: { label: Download link of the firmware }
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options: ["Works", "Boots, but apps crash", "Stuck on boot animation", "Black screen", "Import failed"]
+    validations: { required: true }
+  - type: input
+    id: phone
+    attributes: { label: Your phone and Android version, placeholder: "Xiaomi 15, Android 16" }
+  - type: textarea
+    id: details
+    attributes: { label: Details, description: "What happened? Attach the log from the ⋮ → Log menu if you can." }
