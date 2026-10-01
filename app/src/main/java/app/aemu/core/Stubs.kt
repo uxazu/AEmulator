@@ -53,6 +53,50 @@ class RilStub(
         return true
     }
 
+    /**
+     * Incoming SMS from [from], delivered by the modem like on a phone (UNSOL_RESPONSE_NEW_SMS with a GSM
+     * SMS-DELIVER PDU), so every version from 2.3 on stores it, shows the notification and plays the tone.
+     * The text goes as UCS-2; longer texts are split into concatenated parts (UDH, 67 characters each).
+     */
+    fun sms(from: String, text: String): Boolean {
+        val o = out ?: return false
+        val parts = if (text.length <= 70) listOf(text) else text.chunked(67)
+        val ref = (System.nanoTime() and 0xff).toInt()
+        parts.forEachIndexed { i, part ->
+            unsol(o, UNSOL_RESPONSE_NEW_SMS, str(smsPdu(from, part, if (parts.size > 1) Triple(ref, parts.size, i + 1) else null)))
+        }
+        return true
+    }
+
+    private fun smsPdu(from: String, text: String, concat: Triple<Int, Int, Int>?): String {
+        val b = ByteArrayOutputStream()
+        b.write(0)                                          // no SMSC address
+        b.write(if (concat != null) 0x44 else 0x04)         // SMS-DELIVER, no more messages, UDHI for parts
+        val intl = from.startsWith("+")
+        val digits = from.filter { it.isDigit() }.ifEmpty { "0" }
+        b.write(digits.length); b.write(if (intl) 0x91 else 0x81)
+        b.write(semiOctets(digits))
+        b.write(0)                                          // PID
+        b.write(0x08)                                       // DCS: UCS-2
+        val t = java.util.Calendar.getInstance()
+        val tz = t.timeZone.getOffset(t.timeInMillis) / (15 * 60_000)
+        val stamp = "%02d%02d%02d%02d%02d%02d".format(t.get(java.util.Calendar.YEAR) % 100, t.get(java.util.Calendar.MONTH) + 1,
+            t.get(java.util.Calendar.DAY_OF_MONTH), t.get(java.util.Calendar.HOUR_OF_DAY), t.get(java.util.Calendar.MINUTE), t.get(java.util.Calendar.SECOND))
+        b.write(semiOctets(stamp))
+        val tzBcd = semiOctets("%02d".format(kotlin.math.abs(tz)))[0].toInt() or (if (tz < 0) 0x08 else 0)
+        b.write(tzBcd)
+        val ud = text.toByteArray(Charsets.UTF_16BE)
+        val udh = concat?.let { (r, n, k) -> byteArrayOf(5, 0, 3, r.toByte(), n.toByte(), k.toByte()) } ?: ByteArray(0)
+        b.write(udh.size + ud.size); b.write(udh); b.write(ud)
+        return b.toByteArray().joinToString("") { "%02X".format(it.toInt() and 0xff) }
+    }
+
+    /** BCD with swapped nibbles, padded with F (addresses and time stamps of a PDU) */
+    private fun semiOctets(d: String): ByteArray {
+        val s = if (d.length % 2 == 1) d + "F" else d
+        return ByteArray(s.length / 2) { i -> ((s[2 * i + 1].digitToIntOrNull(16) ?: 0xf) shl 4 or (s[2 * i].digitToInt(16))).toByte() }
+    }
+
     private val connects = ArrayDeque<Long>()
     /** set when telephony keeps crashing against the fake modem: fall back to "radio unavailable" */
     @Volatile private var safeMode = false
@@ -252,6 +296,7 @@ class RilStub(
         private const val UNSOL_RADIO_STATE_CHANGED = 1000
         private const val UNSOL_RESPONSE_CALL_STATE_CHANGED = 1001
         private const val UNSOL_CALL_RING = 1018
+        private const val UNSOL_RESPONSE_NEW_SMS = 1003
         private const val CALL_ACTIVE = 0
         private const val CALL_INCOMING = 4
         private const val RIL_REQUEST_LAST_CALL_FAIL_CAUSE = 18

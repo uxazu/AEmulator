@@ -232,6 +232,8 @@ class VmActivity : ComponentActivity() {
                     }
                     return
                 }
+                i.getStringExtra("sms")?.let { sendSms("+15550001234", it); return }
+                if (i.getBooleanExtra("shot", false)) { runOnUiThread { screenshot() }; return }
                 if (i.hasExtra("adb")) { if (i.getBooleanExtra("adb", false)) vm.adb.start() else vm.adb.stop(); return }
                 val cmd = i.getStringExtra("cmd") ?: return
                 // своё имя файла на каждую команду: медленная предыдущая команда не затрёт ответ
@@ -309,12 +311,29 @@ class VmActivity : ComponentActivity() {
         guestAsync("input text " + q(text.replace(" ", "%s")))
     }
 
+    /**
+     * The frame is taken on the host (the fb0 copy, or the GPU bridge's surface through PixelCopy): `screencap` does
+     * not exist before 4.0 and cannot read the bridge's frames. The PNG lands in the guest's Pictures folder.
+     */
     private fun screenshot() {
         val name = "aemu-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + ".png"
-        val dir = vm.img.sdcardPath.trimEnd('/') + "/Pictures"
-        guestAsync("mkdir -p $dir; screencap -p $dir/$name && echo OK") { out ->
-            toast(if (out.contains("OK")) getString(R.string.m_screenshot_saved, "$dir/$name") else getString(R.string.m_failed))
+        val hostDir = app.aemu.core.Sdcard.hostDir(vm.paths)?.let { java.io.File(it, "Pictures") }
+        if (hostDir == null) { toast(getString(R.string.m_failed)); return }
+        fun save(b: android.graphics.Bitmap) = thread {
+            val ok = runCatching {
+                hostDir.mkdirs()
+                java.io.File(hostDir, name).outputStream().use { b.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            }.isSuccess
+            toast(if (ok) getString(R.string.m_screenshot_saved, vm.img.sdcardPath.trimEnd('/') + "/Pictures/$name") else getString(R.string.m_failed))
+            // the guest's media scanner picks the file up for its gallery
+            if (ok) guestAsync("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${vm.img.sdcardPath.trimEnd('/')}/Pictures/$name")
         }
+        guest.snapshot()?.let { save(it); return }
+        if (surfaceView.width <= 0 || surfaceView.height <= 0) { toast(getString(R.string.m_failed)); return }
+        val b = android.graphics.Bitmap.createBitmap(surfaceView.width, surfaceView.height, android.graphics.Bitmap.Config.ARGB_8888)
+        android.view.PixelCopy.request(surfaceView, b, { r ->
+            if (r == android.view.PixelCopy.SUCCESS) save(b) else toast(getString(R.string.m_failed))
+        }, android.os.Handler(mainLooper))
     }
 
     // APK picked on the host: copied into the shared card folder, then installed by the guest's package manager
@@ -334,7 +353,9 @@ class VmActivity : ComponentActivity() {
     }
 
     private fun sendSms(from: String, body: String) {
-        // no live modem: the message is written straight into the SMS provider inbox
+        // through the emulated modem: stored, notified and rung like a real SMS on every version
+        if (vm.ril.sms(from, body)) { toast(getString(R.string.m_sms_sent)); return }
+        // radio emulation off: the message is written straight into the SMS provider inbox (4.1+)
         val cmd = "content insert --uri content://sms/inbox --bind address:s:${q(from)} --bind body:s:${q(body)} " +
             "--bind read:i:0 --bind date:l:${System.currentTimeMillis()}"
         guestAsync(cmd) { out -> toast(if (out.isBlank()) getString(R.string.m_sms_sent) else out.trim().take(200)) }

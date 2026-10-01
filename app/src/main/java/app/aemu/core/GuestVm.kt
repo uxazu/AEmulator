@@ -728,11 +728,33 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     fun bootSeconds(): Long = if (bootAt == 0L) 0 else ((if (bootDoneAt > 0) bootDoneAt else System.currentTimeMillis()) - bootAt) / 1000
 
+    /**
+     * The PATH of 2.3–4.x starts with /sbin: am/pm/input then look up "app_process" there first and qemu gives up
+     * ("Error while loading …/sbin/app_process"), so every menu action that ran such a script failed.
+     */
     fun guestShell(cmd: String, timeoutMs: Long = 60_000): String =
-        guestRunner.run(listOf("/system/bin/sh", "-c", cmd), timeoutMs).second
+        guestRunner.run(listOf("/system/bin/sh", "-c", "export PATH=/system/bin:/system/xbin:\$PATH; $toolWrappers$cmd"), timeoutMs).second
 
-    fun installApk(apkOnSdcard: String): String =
-        guestRunner.run(listOf("/system/bin/pm", "install", "-r", apkOnSdcard), 600_000).second
+    /**
+     * Shell functions that run the firmware's Java tools (am, pm, input, svc…) through app.aemu.stub.Run, which
+     * calls System.exit() after main(): left alone, the tool's VM waits forever for its binder thread and the command
+     * never returns. Jar and class come from each tool's own script in /system/bin.
+     */
+    private val toolWrappers: String by lazy {
+        val stubs = "/system/framework/aemu-stubs.jar"
+        if (!File(paths.root, stubs.removePrefix("/")).isFile) return@lazy ""
+        val sb = StringBuilder()
+        File(paths.root, "system/bin").listFiles()?.forEach { f ->
+            if (!f.isFile || f.length() > 8_000 || !f.name.matches(Regex("[a-z][a-z0-9_]*"))) return@forEach
+            val text = runCatching { f.readText(Charsets.ISO_8859_1) }.getOrNull() ?: return@forEach
+            val cls = Regex("app_process\\S*\\s+\\S+\\s+([A-Za-z_][\\w.$]*\\.[A-Z][\\w$]*)").find(text)?.groupValues?.get(1) ?: return@forEach
+            val jar = Regex("framework/([\\w.-]+\\.jar)").find(text)?.groupValues?.get(1) ?: return@forEach
+            sb.append("${f.name}() { CLASSPATH=/system/framework/$jar:$stubs app_process /system/bin app.aemu.stub.Run $cls \"\$@\"; }; ")
+        }
+        sb.toString()
+    }
+
+    fun installApk(apkOnSdcard: String): String = guestShell("pm install -r $apkOnSdcard", 600_000)
 
     private fun pidOf(p: Process): Int? {
         var c: Class<*>? = p.javaClass

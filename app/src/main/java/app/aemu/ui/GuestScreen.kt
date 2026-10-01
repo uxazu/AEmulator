@@ -70,6 +70,9 @@ class GuestScreen(ctx: Context, private val w: Int, private val h: Int) : View(c
 
     fun stop() { live = false }
 
+    /** Copy of the last frame shown from fb0 (software path); null in GPU passthrough or before the first frame. */
+    fun snapshot(): Bitmap? = if (passthrough) null else bmp?.copy(Bitmap.Config.ARGB_8888, false)
+
     fun poke() { quiet = 0; synchronized(gate) { gate.notifyAll() } }
 
     private fun tick() {
