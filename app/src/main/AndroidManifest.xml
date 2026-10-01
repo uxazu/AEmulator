@@ -67,6 +67,7 @@
             android:process=":vm"
             android:resizeableActivity="true"
             android:screenOrientation="unspecified"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.AEmulator.Vm" />
 
         <service

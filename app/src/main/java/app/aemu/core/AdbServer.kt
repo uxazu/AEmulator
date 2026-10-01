@@ -80,7 +80,7 @@ class AdbServer(private val vm: GuestVm) {
                 if (len > 0 && !readFully(input, data)) break
                 when (cmd) {
                     CNXN -> {
-                        maxData = a1.coerceIn(4096, 256 * 1024)
+                        maxData = a1.coerceIn(4096, 1024 * 1024)
                         val p = vm.props
                         val banner = "device::ro.product.name=${p.get("ro.product.name") ?: "aemu"};" +
                             "ro.product.model=${p.get("ro.product.model") ?: vm.img.name};" +
@@ -192,12 +192,15 @@ class AdbServer(private val vm: GuestVm) {
 
     /** guest sh under qemu; stdout+stderr merged (legacy shell protocol has no separate stderr) */
     private fun shell(s: Stream, cmd: String, interactive: Boolean) {
+        if (!interactive && logcat(s, cmd)) return
         val r = vm.guestRunner
-        val argv = if (interactive) listOf("/system/bin/sh", "-i") else listOf("/system/bin/sh", "-c", cmd)
+        val argv = if (interactive) listOf("/system/bin/sh", "-i") else listOf("/system/bin/sh", "-c", vm.shellPrefix + cmd)
         val pb = ProcessBuilder(r.cmdline(argv)).directory(vm.paths.bin).redirectErrorStream(true)
         pb.environment().clear()
         pb.environment().putAll(r.env(mapOf("HOME" to "/data/local/tmp", "TERM" to "dumb")))
         val p = pb.start()
+        // the same PATH order and tool wrappers as for a one-shot command
+        if (interactive) runCatching { p.outputStream.write((vm.shellPrefix + "\n").toByteArray()); p.outputStream.flush() }
         val pump = thread(isDaemon = true) {
             runCatching {
                 val buf = ByteArray(8192)
@@ -234,6 +237,54 @@ class AdbServer(private val vm: GuestVm) {
         pump.interrupt()
     }
 
+    /**
+     * `logcat` served by the host from the guest's log files: the guest's own logcat expects the kernel logger
+     * (2.3–4.4) or logd's reader socket (5.0+), neither exists, and it only says "logcat read failure".
+     * Supports -d (dump and exit), -c (clear) and -b <buffer>; without -d it keeps following like logcat does.
+     * Records carry no time or pid, so the brief format "P/Tag: message" is used.
+     */
+    private fun logcat(s: Stream, raw: String): Boolean {
+        // `adb logcat` sends: export ANDROID_LOG_TAGS="" ; exec logcat <args>
+        val cmd = raw.trim().replaceFirst(Regex("^export ANDROID_LOG_TAGS=(\"[^\"]*\"|'[^']*'|\\S*)\\s*;\\s*"), "").removePrefix("exec ").trim()
+        val args = cmd.split(Regex("\\s+"))
+        if (args.firstOrNull() != "logcat" || cmd.contains('|') || cmd.contains('>') || cmd.contains(';')) return false
+        val buffers = ArrayList<String>()
+        var dump = false
+        var i = 1
+        while (i < args.size) {
+            when (args[i]) {
+                "-d" -> dump = true
+                "-c" -> { GuestLog.clear(vm.paths.root); return true }
+                "-b" -> { args.getOrNull(i + 1)?.let { b -> buffers += if (b == "all") listOf("main", "system", "radio") else b.split(',') }; i++ }
+                "-v", "-f", "-r", "-n", "-t", "-T", "-s", "-g" -> if (args[i] != "-s" && args[i] != "-g") i++
+            }
+            i++
+        }
+        val names = buffers.ifEmpty { listOf("main", "system") }.distinct()
+        val offsets = HashMap<String, Long>()
+        fun emit(name: String) {
+            val f = File(vm.paths.root, "dev/log/$name")
+            val len = f.length()
+            var from = offsets[name] ?: 0L
+            if (len < from) from = 0L   // the log was cleared
+            if (len == from) return
+            val data = runCatching {
+                java.io.RandomAccessFile(f, "r").use { r -> r.seek(from); ByteArray((len - from).coerceAtMost(4L shl 20).toInt()).also { r.readFully(it) } }
+            }.getOrNull() ?: return
+            offsets[name] = from + data.size
+            val sb = StringBuilder()
+            for (rec in GuestLog.parse(data)) sb.append(rec.prio).append('/').append(rec.tag).append(": ").append(rec.msg.trimEnd('\n')).append('\n')
+            if (sb.isNotEmpty()) s.out.write(sb.toString().toByteArray())
+        }
+        names.forEach { emit(it) }
+        if (dump) return true
+        while (!s.closed) {
+            Thread.sleep(250)
+            names.forEach { emit(it) }
+        }
+        return true
+    }
+
     /** guest path → file on the phone: memory-card paths go to the shared card folder, the rest into the image's root */
     private fun host(guest: String): File {
         val p = "/" + guest.split('/').filter { it.isNotEmpty() && it != "." }
@@ -250,7 +301,7 @@ class AdbServer(private val vm: GuestVm) {
 
     private fun sync(s: Stream) {
         val i = s.inp
-        val o = java.io.BufferedOutputStream(s.out, 65536)
+        val o = java.io.BufferedOutputStream(s.out, 512 * 1024)
         val h = ByteArray(8)
         while (true) {
             if (!readFully(i, h)) break

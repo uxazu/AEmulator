@@ -73,14 +73,28 @@ object AppPrefs {
         .putBoolean("def_nav", s.showNavBar).putBoolean("def_awake", s.keepScreenOn).apply()
 
     /** Контекст с выбранным языком — для attachBaseContext каждой активности. */
+    /**
+     * Language and theme of the app applied to an activity's resources. The theme goes into the night bits of
+     * uiMode: values-night (window background), isSystemInDarkTheme and enableEdgeToEdge's status bar icons then
+     * follow the app's choice — before, a dark app theme on a light system kept a white window background and dark,
+     * invisible status bar icons.
+     */
     fun wrap(base: Context): Context {
         val tag = language(base)
-        if (tag.isEmpty()) return base
-        val loc = Locale.forLanguageTag(tag)
-        Locale.setDefault(loc)
+        val night = when (theme(base)) {
+            THEME_LIGHT -> Configuration.UI_MODE_NIGHT_NO
+            THEME_DARK -> Configuration.UI_MODE_NIGHT_YES
+            else -> -1
+        }
+        if (tag.isEmpty() && night < 0) return base
         val cfg = Configuration(base.resources.configuration)
-        cfg.setLocale(loc)
-        cfg.setLayoutDirection(loc)
+        if (tag.isNotEmpty()) {
+            val loc = Locale.forLanguageTag(tag)
+            Locale.setDefault(loc)
+            cfg.setLocale(loc)
+            cfg.setLayoutDirection(loc)
+        }
+        if (night >= 0) cfg.uiMode = (cfg.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or night
         return base.createConfigurationContext(cfg)
     }
 }

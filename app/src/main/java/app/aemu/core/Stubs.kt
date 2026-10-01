@@ -127,7 +127,7 @@ class RilStub(
             val b = ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN)
             val request = b.getInt()
             val serial = b.getInt()
-            val (err, payload) = runCatching { handle(request) }.getOrElse { 0 to ByteArray(0) }
+            val (err, payload) = runCatching { if (request == RIL_REQUEST_SIM_IO) 0 to simIo(b) else handle(request) }.getOrElse { 0 to ByteArray(0) }
             val resp = ByteArrayOutputStream()
             resp.write(le(0)); resp.write(le(serial)); resp.write(le(err)); resp.write(payload)
             frame(o, resp.toByteArray())
@@ -178,7 +178,6 @@ class RilStub(
             RIL_REQUEST_OPERATOR -> 0 to strs(OPERATOR_NAME, OPERATOR_NAME, mcc + mnc)
             RIL_REQUEST_SETUP_DATA_CALL -> 0 to dataCall(single = true)
             RIL_REQUEST_DATA_CALL_LIST -> 0 to dataCall(single = false)
-            RIL_REQUEST_SIM_IO -> 0 to (le(0x6A) + le(0x82) + str(null))   // "file not found": no SIM records
             RIL_REQUEST_GET_IMEI -> 0 to str(imei)
             RIL_REQUEST_GET_IMEISV -> 0 to str(IMEISV)
             RIL_REQUEST_BASEBAND_VERSION -> 0 to str(BASEBAND)
@@ -197,6 +196,29 @@ class RilStub(
             // shorter payloads crash com.android.phone (Samsung reads [0], Qualcomm IMS state reads [1])
             else -> 0 to (le(4) + ByteArray(32))
         }
+    }
+
+    /**
+     * SIM file access. Only EF_ICCID is answered: from 5.1 SubscriptionController creates the SIM's subscription
+     * from its ICCID, and without one the system shows "No SIM card" (no SMS, no mobile network). Everything else
+     * stays "file not found" (no contacts, SMS or settings stored on the SIM).
+     */
+    private fun simIo(b: ByteBuffer): ByteArray {
+        val notFound = le(0x6A) + le(0x82) + str(null)
+        val command = runCatching { b.getInt() }.getOrDefault(0)
+        val file = runCatching { b.getInt() }.getOrDefault(0)
+        if (file != EF_ICCID) return notFound
+        return when (command) {
+            SIM_GET_RESPONSE -> le(0x90) + le(0) + str("0000000a2fe204000fa0aa01020000")   // transparent EF, 10 bytes
+            SIM_READ_BINARY -> le(0x90) + le(0) + str(iccid())
+            else -> notFound
+        }
+    }
+
+    /** ICCID in the SIM's swapped-BCD form: 89 (telecom) + the operator's MCC + digits from the IMEI */
+    private fun iccid(): String {
+        val digits = ("89" + operator.first + imei.filter { it.isDigit() } + "0000000000").take(20)
+        return digits.chunked(2).joinToString("") { "${it[1]}${it[0]}" }
     }
 
     private fun afterPower(o: OutputStream, args: ByteBuffer) {
@@ -297,6 +319,9 @@ class RilStub(
         private const val UNSOL_RESPONSE_CALL_STATE_CHANGED = 1001
         private const val UNSOL_CALL_RING = 1018
         private const val UNSOL_RESPONSE_NEW_SMS = 1003
+        private const val EF_ICCID = 0x2FE2
+        private const val SIM_READ_BINARY = 176
+        private const val SIM_GET_RESPONSE = 192
         private const val CALL_ACTIVE = 0
         private const val CALL_INCOMING = 4
         private const val RIL_REQUEST_LAST_CALL_FAIL_CAUSE = 18

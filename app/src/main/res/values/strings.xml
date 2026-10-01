@@ -146,6 +146,7 @@
     <string name="vs_recovery_install">Install…</string>
     <string name="vs_recovery_failed">Not a recovery image</string>
     <string name="m_adb">ADB over network</string>
+    <string name="m_terminal">Terminal</string>
     <string name="m_adb_enable">Enable</string>
     <string name="m_adb_hint">Anyone on this Wi-Fi network gets a root shell of the firmware. Switch it off on public networks.</string>
     <string name="add_import">Import firmware file</string>

@@ -733,7 +733,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
      * ("Error while loading …/sbin/app_process"), so every menu action that ran such a script failed.
      */
     fun guestShell(cmd: String, timeoutMs: Long = 60_000): String =
-        guestRunner.run(listOf("/system/bin/sh", "-c", "export PATH=/system/bin:/system/xbin:\$PATH; $toolWrappers$cmd"), timeoutMs).second
+        guestRunner.run(listOf("/system/bin/sh", "-c", shellPrefix + cmd), timeoutMs).second
+
+    /** Put in front of every guest shell command (menu, adb, terminal): PATH order and the tool wrappers. */
+    val shellPrefix: String get() = "export PATH=/system/bin:/system/xbin:\$PATH; $toolWrappers"
 
     /**
      * Shell functions that run the firmware's Java tools (am, pm, input, svc…) through app.aemu.stub.Run, which

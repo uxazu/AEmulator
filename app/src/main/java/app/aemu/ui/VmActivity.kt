@@ -17,6 +17,9 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Lan
+import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
@@ -62,6 +65,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -135,6 +140,8 @@ class VmActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // the overlay pads itself (status bar, navigation bar, keyboard): the terminal stays above the keyboard
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         val id = intent.getStringExtra(EXTRA_ID)
         val cur = VmHost.vm
         val img = ((if (id != null) ImageStore.get(this, id) else null) ?: cur?.img)
@@ -179,19 +186,29 @@ class VmActivity : ComponentActivity() {
 
         // экран гостя вписываем с сохранением пропорций над панелью кнопок
         val navDp = if (s.showNavBar) 64 else 0
+        // the window draws edge to edge (for the overlay's keyboard padding): the guest screen keeps out of the
+        // camera cutout and system bars; the keyboard is not counted, so the screen does not jump when it opens
+        var safeTop = 0
+        var safeBottom = 0
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root) { v, ins ->
+            val bars = ins.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or androidx.core.view.WindowInsetsCompat.Type.displayCutout())
+            if (bars.top != safeTop || bars.bottom != safeBottom) { safeTop = bars.top; safeBottom = bars.bottom; v.requestLayout() }
+            ins
+        }
         root.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
             val navPx = (navDp * resources.displayMetrics.density).toInt()
             val aw = r - l
-            val ah = b - t - navPx
+            val ah = b - t - navPx - safeTop - safeBottom
             if (aw <= 0 || ah <= 0) return@addOnLayoutChangeListener
             val scale = minOf(aw.toFloat() / gw, ah.toFloat() / gh)
             val w = (gw * scale).toInt()
             val h = (gh * scale).toInt()
             val lp = box.layoutParams as FrameLayout.LayoutParams
-            if (lp.width != w || lp.height != h) {
+            val top = safeTop + (ah - h) / 2
+            if (lp.width != w || lp.height != h || lp.topMargin != top) {
                 lp.width = w; lp.height = h
                 lp.gravity = Gravity.CENTER_HORIZONTAL or Gravity.TOP
-                lp.topMargin = (ah - h) / 2
+                lp.topMargin = top
                 v.post { box.layoutParams = lp }
             }
         }
@@ -487,6 +504,7 @@ class VmActivity : ComponentActivity() {
     @Composable
     private fun Overlay() {
         var showLog by remember { mutableStateOf(false) }
+        var showTerm by remember { mutableStateOf(false) }
         var menu by remember { mutableStateOf(false) }
         var dialog by remember { mutableStateOf(Dlg.NONE) }
         val running = state == GuestVm.State.RUNNING
@@ -505,7 +523,7 @@ class VmActivity : ComponentActivity() {
 
             if (drawing && state == GuestVm.State.BOOTING && !showLog) {
                 Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f),
-                    modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp)) {
+                    modifier = Modifier.align(Alignment.TopStart).displayCutoutPadding().statusBarsPadding().padding(8.dp)) {
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         LoadingIndicator(Modifier.size(24.dp))
                         Spacer(Modifier.width(6.dp))
@@ -518,9 +536,12 @@ class VmActivity : ComponentActivity() {
             AnimatedVisibility(visible = showLog, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
                 LogPanel(onClose = { showLog = false })
             }
+            AnimatedVisibility(visible = showTerm, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+                TerminalPanel(onClose = { showTerm = false })
+            }
 
             // top menu button (hidden while the log is open so it does not cover the log toolbar); drag to move it
-            if (!showLog) Box(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)
+            if (!showLog && !showTerm) Box(Modifier.align(Alignment.TopEnd).displayCutoutPadding().statusBarsPadding().padding(8.dp)
                 .offset { IntOffset(menuOffset.x.roundToInt(), menuOffset.y.roundToInt()) }
                 .pointerInput(Unit) {
                     detectDragGestures(onDragEnd = { saveMenuOffset() }) { ch, d -> ch.consume(); menuOffset += d }
@@ -531,6 +552,8 @@ class VmActivity : ComponentActivity() {
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text(stringResource(R.string.log)) }, leadingIcon = { Icon(Icons.Rounded.Terminal, null) },
                         onClick = { menu = false; showLog = true })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.m_terminal)) }, leadingIcon = { Icon(Icons.Rounded.Code, null) },
+                        enabled = running, onClick = { menu = false; showTerm = true })
                     HorizontalDivider()
                     DropdownMenuItem(text = { Text(stringResource(R.string.vol_up)) }, leadingIcon = { Icon(Icons.Rounded.VolumeUp, null) },
                         onClick = { vm.input.press(InputService.KEY_VOLUMEUP) })
@@ -584,7 +607,7 @@ class VmActivity : ComponentActivity() {
             }
 
             // панель кнопок Android
-            if (vm.settings.showNavBar && !showLog) {
+            if (vm.settings.showNavBar && !showLog && !showTerm) {
                 HorizontalFloatingToolbar(
                     expanded = true,
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 6.dp),
@@ -655,7 +678,7 @@ class VmActivity : ComponentActivity() {
         }
         val list = if (guestTab) guestLines else logLines
         Surface(Modifier.fillMaxSize(), color = Color(0xF0101410), contentColor = Color(0xFFE2E3DD)) {
-            Column(Modifier.statusBarsPadding().navigationBarsPadding().padding(12.dp)) {
+            Column(Modifier.statusBarsPadding().navigationBarsPadding().imePadding().padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.log), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f),
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -680,6 +703,71 @@ class VmActivity : ComponentActivity() {
                 SelectionContainer {
                     LazyColumn(state = st, modifier = Modifier.fillMaxSize()) {
                         items(list) { Text(it, style = Mono, color = Color(0xFFCFE8CF)) }
+                    }
+                }
+            }
+        }
+    }
+
+    // shell terminal into the guest: its lines survive closing and reopening the panel
+    private val termLines = mutableStateListOf<String>()
+    private val termHistory = ArrayList<String>()
+
+    @Composable
+    private fun TerminalPanel(onClose: () -> Unit) {
+        var cmd by remember { mutableStateOf("") }
+        var busy by remember { mutableStateOf(false) }
+        var histPos by remember { mutableStateOf(-1) }
+        fun run() {
+            val c = cmd.trim()
+            if (c.isEmpty() || busy) return
+            cmd = ""; histPos = -1
+            termHistory.remove(c); termHistory.add(c)
+            if (c == "clear") { termLines.clear(); return }
+            termLines.add("$ $c")
+            busy = true
+            thread {
+                val out = runCatching { vm.guestShell(c, 180_000) }.getOrElse { it.toString() }
+                runOnUiThread {
+                    termLines.addAll(out.trimEnd('\n').lines())
+                    while (termLines.size > 3000) termLines.removeAt(0)
+                    busy = false
+                }
+            }
+        }
+        Surface(Modifier.fillMaxSize(), color = Color(0xF0101410), contentColor = Color(0xFFE2E3DD)) {
+            Column(Modifier.statusBarsPadding().navigationBarsPadding().imePadding().padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.m_terminal), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (busy) LoadingIndicator(Modifier.size(32.dp))
+                    IconButton(onClick = { copyLog(termLines.toList()) }) { Icon(Icons.Rounded.ContentCopy, stringResource(R.string.log_copy)) }
+                    FilledTonalIconButton(onClick = onClose) { Icon(Icons.Rounded.Close, stringResource(R.string.close)) }
+                }
+                Spacer(Modifier.height(8.dp))
+                val st = rememberLazyListState()
+                LaunchedEffect(termLines.size) { if (termLines.isNotEmpty()) st.scrollToItem(termLines.size - 1) }
+                SelectionContainer(Modifier.weight(1f)) {
+                    LazyColumn(state = st, modifier = Modifier.fillMaxSize()) {
+                        items(termLines) { Text(it, style = Mono, color = if (it.startsWith("$ ")) Color(0xFF9AD0FF) else Color(0xFFCFE8CF)) }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = {
+                        if (termHistory.isNotEmpty()) {
+                            histPos = if (histPos <= 0) termHistory.size - 1 else histPos - 1
+                            cmd = termHistory[histPos]
+                        }
+                    }) { Icon(Icons.Rounded.History, null) }
+                    OutlinedTextField(cmd, { cmd = it }, modifier = Modifier.weight(1f), singleLine = true,
+                        textStyle = Mono, placeholder = { Text("getprop ro.build.version.release", style = Mono) },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Send,
+                            autoCorrectEnabled = false, capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.None),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { run() }))
+                    Spacer(Modifier.width(8.dp))
+                    FilledTonalIconButton(onClick = { run() }, enabled = !busy && cmd.isNotBlank()) {
+                        Icon(Icons.AutoMirrored.Rounded.Send, stringResource(R.string.m_send))
                     }
                 }
             }
