@@ -569,8 +569,8 @@ class VmActivity : ComponentActivity() {
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 6.dp),
                 ) {
                     IconButton(onClick = { vm.input.press(InputService.KEY_BACK) }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.back)) }
-                    IconButton(onClick = { vm.input.press(vm.input.homeCode) }) { Icon(Icons.Rounded.Circle, stringResource(R.string.home)) }
-                    if (vm.img.api >= 11) IconButton(onClick = { vm.input.press(InputService.KEY_APPSELECT) }) { Icon(Icons.Rounded.CropSquare, stringResource(R.string.recents)) }
+                    IconButton(onClick = { vm.input.press(InputService.KEY_HOME) }) { Icon(Icons.Rounded.Circle, stringResource(R.string.home)) }
+                    IconButton(onClick = { vm.input.recents(vm.img.api, vm.img.skin) }) { Icon(Icons.Rounded.CropSquare, stringResource(R.string.recents)) }
                     IconButton(onClick = { vm.input.press(InputService.KEY_MENU) }) { Icon(Icons.Rounded.Menu, stringResource(R.string.menu)) }
                 }
             }

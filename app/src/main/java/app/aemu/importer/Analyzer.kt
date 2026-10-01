@@ -104,7 +104,7 @@ class Analyzer(private val ctx: Context, private val paths: VmPaths, private val
     }
 
     companion object {
-        const val VERSION = 13
+        const val VERSION = 14
 
         private val LMK_DEFAULTS = listOf(
             "ro.FOREGROUND_APP_ADJ" to "0", "ro.VISIBLE_APP_ADJ" to "1", "ro.PERCEPTIBLE_APP_ADJ" to "2",
@@ -166,7 +166,17 @@ class Analyzer(private val ctx: Context, private val paths: VmPaths, private val
     private fun skin(p: Map<String, String>): String {
         val man = (p["ro.product.manufacturer"] ?: p["ro.product.brand"] ?: "").lowercase()
         fun has(path: String) = File(root, path).exists()
+        val brand = (p["ro.product.brand"] ?: "").lowercase()
+        val api = p["ro.build.version.sdk"]?.toIntOrNull() ?: guessApi(p["ro.build.version.release"])
         return when {
+            // HyperOS keeps the ro.miui.* props of MIUI, so it is checked first
+            p.containsKey("ro.mi.os.version.name") || p.containsKey("ro.mi.os.version.code") -> "HyperOS " + (p["ro.mi.os.version.name"] ?: "")
+            // Infinix: 4.x plain AOSP, 5.x XUI, 6.0+ XOS; Tecno: 4.x–5.x AOSP, 6.0+ HiOS
+            man.contains("infinix") || brand.contains("infinix") -> when { api >= 23 -> "XOS"; api >= 21 -> "XUI"; else -> "AOSP" }
+            man.contains("tecno") || brand.contains("tecno") -> if (api >= 23) "HiOS" else "AOSP"
+            p.containsKey("ro.build.version.oneui") || p.containsKey("ro.build.version.sep") -> "One UI"
+            p.containsKey("ro.build.version.realmeui") -> "realme UI"
+            p.containsKey("ro.build.version.oplusrom") -> "ColorOS"
             p.containsKey("ro.miui.ui.version.name") || p.containsKey("ro.miui.ui.version.code") || has("system/app/MiuiHome.apk") || has("system/app/MiuiHome") -> "MIUI " + (p["ro.miui.ui.version.name"] ?: "")
             p.containsKey("ro.cm.version") -> "CyanogenMod ${p["ro.cm.version"]?.substringBefore('-')}"
             p.containsKey("ro.lineage.version") -> "LineageOS"

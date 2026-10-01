@@ -139,30 +139,24 @@ class InputService(private val paths: VmPaths, private val log: (String) -> Unit
         synchronized(this) { flush(b) }
     }
 
-    /**
-     * Код клавиши «Домой» для этой прошивки. В Generic.kl 4.x код 102 — MOVE_HOME (курсор в начало
-     * строки), а HOME — 172; в раскладках 2.x бывает наоборот. Берём из раскладки самой прошивки.
-     */
-    @Volatile var homeCode = KEY_HOME
-
-    fun detectHome(root: java.io.File) {
-        val dir = java.io.File(root, "system/usr/keylayout")
-        for (n in listOf("Generic.kl", "qwerty.kl")) {
-            val codes = runCatching { java.io.File(dir, n).readLines() }.getOrNull() ?: continue
-            val home = codes.firstNotNullOfOrNull { l ->
-                val p = l.trim().split(Regex("\\s+"))
-                if (p.size >= 3 && p[0] == "key" && p[2] == "HOME") p[1].toIntOrNull() else null
-            }
-            if (home != null) { homeCode = home; return }
-        }
-    }
-
     fun press(code: Int, holdMs: Long = 80) {
         Thread {
             key(code, true)
             Thread.sleep(holdMs)
             key(code, false)
         }.start()
+    }
+
+    /**
+     * Recent apps. Up to 4.4 the guest believes it has hardware keys (qemu.hw.mainkeys) and every vendor opens recents
+     * on a long Home press, while their window managers often ignore APP_SWITCH (TouchWiz, Sense, MIUI). From 5.0 a
+     * long Home press starts the assistant, and APP_SWITCH (dhd-touch.kl) is handled everywhere. MIUI on hardware keys
+     * puts its recents screen on the Menu key at every version.
+     */
+    fun recents(api: Int, skin: String) = when {
+        skin.contains("MIUI", true) -> press(KEY_MENU)
+        api >= 21 -> press(KEY_APPSELECT)
+        else -> press(KEY_HOME, 900)
     }
 
     fun tap(x: Int, y: Int) {

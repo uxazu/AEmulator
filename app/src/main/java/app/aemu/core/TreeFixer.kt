@@ -111,6 +111,7 @@ class TreeFixer(
         protectOat()
         fixThemeXml()
         parkWhetstone()
+        parkQcomServices()
         swapMtkAudioHal()
         eglConfig(img.settings.gpu)
         makeDataDirs()
@@ -123,6 +124,7 @@ class TreeFixer(
         vendorChecks()
         scriptShebangs()
         samsungEfs()
+        keyLayout()
         for (n in LOGS) File(root, "dev/log/$n").let { if (!it.isFile) { it.parentFile?.mkdirs(); it.createNewFile() } }
         makeFb()
     }
@@ -230,6 +232,53 @@ class TreeFixer(
         }
     }
 
+    /**
+     * qemu names the input device "dhd-touch"; with no layout of that name the guest falls back to the firmware's
+     * Generic.kl / qwerty.kl, where vendors map the codes differently (4.x Generic.kl: 102 = MOVE_HOME, 580 often
+     * unmapped), so Home and Recents did nothing on many firmwares. A layout under the device's own name is looked up
+     * first by every version from 2.3 on and gives the navigation bar the same codes everywhere.
+     */
+    private fun keyLayout() {
+        val f = File(root, "system/usr/keylayout/dhd-touch.kl")
+        val text = buildString {
+            append("# AEmulator: navigation bar and hardware keys of the emulator\n")
+            append("key ${InputService.KEY_HOME} HOME WAKE\n")
+            append("key 172 HOME WAKE\n")
+            append("key ${InputService.KEY_BACK} BACK WAKE_DROPPED\n")
+            append("key ${InputService.KEY_MENU} MENU WAKE_DROPPED\n")
+            append("key ${InputService.KEY_SEARCH} SEARCH WAKE_DROPPED\n")
+            append("key ${InputService.KEY_POWER} POWER WAKE\n")
+            append("key ${InputService.KEY_VOLUMEDOWN} VOLUME_DOWN WAKE\n")
+            append("key ${InputService.KEY_VOLUMEUP} VOLUME_UP WAKE\n")
+            append("key 113 VOLUME_MUTE\n")
+            append("key 212 CAMERA\n")
+            // APP_SWITCH exists from 3.0; older layouts reject unknown labels and drop the whole file
+            if (img.api >= 11) append("key ${InputService.KEY_APPSELECT} APP_SWITCH\n")
+        }
+        if (runCatching { f.readText() }.getOrNull() == text) return
+        runCatching { f.parentFile?.mkdirs(); f.writeText(text); f.setReadable(true, false) }
+            .onFailure { log("key layout: ${it.message}") }
+    }
+
+    /**
+     * Qualcomm builds: QTI permissions, DPM, the location stack, the RIL message tunnel and Dirac audio bind to modem,
+     * DSP and data-path daemons that do not exist here; their apps crash in a loop and drag system_server with them.
+     */
+    private fun parkQcomServices() {
+        val parked = File(root, "system/.aemu-parked")
+        var n = 0
+        // 4.x keeps apps as bare app/Name.apk (+ .odex) instead of app/Name/
+        for (rel in QCOM_PARK.flatMap { if (it.endsWith(".xml")) listOf(it) else listOf(it, "$it.apk", "$it.odex") }) {
+            val f = File(root, rel)
+            if (!f.exists() && !isLink(f)) continue
+            parked.mkdirs()
+            val dst = File(parked, rel.replace('/', '#'))
+            if (dst.exists()) ImageStore.wipe(dst)
+            if (f.renameTo(dst)) n++
+        }
+        if (n > 0) log("Qualcomm: vendor services set aside: $n")
+    }
+
     private fun installEngineFiles() {
         val copies = when (engine) {
             Engine.KK -> listOf(
@@ -238,7 +287,6 @@ class TreeFixer(
                 "audio.primary.default.so" to "system/lib/hw/audio.primary.default.so",
                 "gralloc.default.so" to "system/lib/hw/gralloc.default.so",
                 "fbpaint" to "system/bin/fbpaint",
-                "netprobe" to "system/bin/netprobe",
                 "aemu-stubs.jar" to "system/framework/aemu-stubs.jar",
             )
             Engine.GB -> listOf(
@@ -248,6 +296,8 @@ class TreeFixer(
                 "fbpaint" to "system/bin/fbpaint",
             )
         }
+        // a static network debugging tool shipped by older versions; nothing runs it
+        File(root, "system/bin/netprobe").delete()
         // образы, подготовленные старой версией: вернуть родной gralloc.default из «парковки»
         val parkedGralloc = File(root, "system/.aemu-parked/system#lib#hw#gralloc.default.so")
         if (parkedGralloc.isFile) {
@@ -886,6 +936,15 @@ class TreeFixer(
             return runCatching { String(f.readBytes(), Charsets.ISO_8859_1).contains("AudioMTKHardware") }.getOrDefault(false)
         }
 
+        private val QCOM_PARK = listOf(
+            "system/etc/permissions/qti_permissions.xml",
+            "system/etc/permissions/com.qti.dpmframework.xml",
+            "system/priv-app/com.qualcomm.location",
+            "system/priv-app/qcrilmsgtunnel",
+            "system/priv-app/dpmserviceapp",
+            "system/priv-app/DiracAudioControlService",
+            "system/app/DiracManager",
+        )
         private val LOGS = listOf("main", "system", "radio") // events — канал, его делает EventsSink
         private val DATA_DIRS = listOf(
             "data", "data/app", "data/app-private", "data/app-lib", "data/app-asec", "data/data", "data/dalvik-cache",

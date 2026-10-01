@@ -173,6 +173,69 @@ EXPORT int execvp(const char *file, char *const argv[]) {
     return fail(last);
 }
 
+/* ------------------------------------------------------------------ read-only precompiled /system code */
+/*
+ * On a phone /system is a read-only mount. Here it is a plain directory owned by the guest's uid, and installd /
+ * PackageManager of 5.0+ "clean up" the stock odex/oat files on a fresh /data: the framework and the apps then fail
+ * with "No original dex files found" on every following boot. The host takes the write bit away (TreeFixer.protectOat),
+ * but an owner can chmod it back. During a normal boot (AEMU_RO_SYSTEM=1) changes to that code fail with EROFS like on
+ * the real mount; recovery does not set the variable, so flashing still works.
+ */
+#define EROFS 30
+#define AT_FDCWD (-100)
+static int g_ro = -1;
+static int ro_enabled(void) {
+    if (g_ro < 0) {
+        g_ro = 0;
+        for (char **e = environ; e && *e; e++) {
+            const char *v = *e, *k = "AEMU_RO_SYSTEM=1";
+            int i = 0;
+            while (k[i] && v[i] == k[i]) i++;
+            if (!k[i]) { g_ro = 1; break; }
+        }
+    }
+    return g_ro;
+}
+static int has(const char *s, const char *sub) {
+    for (; *s; s++) {
+        int i = 0;
+        while (sub[i] && s[i] == sub[i]) i++;
+        if (!sub[i]) return 1;
+    }
+    return 0;
+}
+static int ends(const char *s, const char *suf) {
+    int n = 0, m = 0;
+    while (s[n]) n++;
+    while (suf[m]) m++;
+    if (m > n) return 0;
+    for (int i = 0; i < m; i++) if (s[n - m + i] != suf[i]) return 0;
+    return 1;
+}
+static int ro_path(const char *p) {
+    if (!p || !ro_enabled()) return 0;
+    if (!(p[0] == '/' && p[1] == 's' && p[2] == 'y' && p[3] == 's' && p[4] == 't' && p[5] == 'e' && p[6] == 'm' && p[7] == '/')) return 0;
+    return has(p, "/oat/") || has(p, "/framework/arm") || ends(p, ".odex") || ends(p, ".oat") || ends(p, ".art") || ends(p, ".vdex");
+}
+#define SYS_unlink 10
+#define SYS_chmod 15
+#define SYS_rename 38
+#define SYS_rmdir 40
+#define SYS_unlinkat 328
+static int ret(long r) { return r < 0 ? fail(r) : (int)r; }
+EXPORT int unlink(const char *p) { return ro_path(p) ? fail(-EROFS) : ret(sys3(SYS_unlink, (long)p, 0, 0)); }
+EXPORT int rmdir(const char *p) { return ro_path(p) ? fail(-EROFS) : ret(sys3(SYS_rmdir, (long)p, 0, 0)); }
+EXPORT int remove(const char *p) {
+    if (ro_path(p)) return fail(-EROFS);
+    long r = sys3(SYS_unlink, (long)p, 0, 0);
+    if (r == -21 /* EISDIR */) r = sys3(SYS_rmdir, (long)p, 0, 0);
+    return ret(r);
+}
+EXPORT int rename(const char *a, const char *b) { return ro_path(a) || ro_path(b) ? fail(-EROFS) : ret(sys3(SYS_rename, (long)a, (long)b, 0)); }
+EXPORT int chmod(const char *p, unsigned m) { return ro_path(p) ? fail(-EROFS) : ret(sys3(SYS_chmod, (long)p, (long)m, 0)); }
+EXPORT int unlinkat(int fd, const char *p, int fl) {
+    return (fd == AT_FDCWD || p[0] == '/') && ro_path(p) ? fail(-EROFS) : ret(sys3(SYS_unlinkat, fd, (long)p, fl));
+}
 /* ------------------------------------------------------------------ учёт трафика (xt_qtaguid) */
 /*
  * NetworkManagementService включает учёт трафика, только если есть /proc/net/xt_qtaguid/ctrl; без него
@@ -375,6 +438,95 @@ out:
     return res;
 }
 
+/*
+ * qemu passes the phone's own /proc/meminfo through: a 2.3 firmware saw 16 GB and vendors that take the total from a
+ * build prop (MIUI "-22766MB of 1GB available") computed negative free memory. The file is served scaled to the
+ * guest's RAM budget (AEMU_RAM_KB from the host): every kB value times guest/host total, so free, cached and buffers
+ * keep the phone's proportions. -nostdlib on ARMv7 has no division helpers, so the division is done by shifts.
+ */
+static unsigned long long udiv64(unsigned long long n, unsigned long d) {
+    unsigned long long q = 0, r = 0;
+    for (int i = 63; i >= 0; i--) {
+        r = (r << 1) | ((n >> i) & 1);
+        if (r >= d) { r -= d; q |= 1ULL << i; }
+    }
+    return q;
+}
+static unsigned long env_ulong(const char *key) {
+    for (char **e = environ; e && *e; e++) {
+        const char *v = *e;
+        int i = 0;
+        while (key[i] && v[i] == key[i]) i++;
+        if (key[i] || v[i] != '=') continue;
+        unsigned long x = 0;
+        for (v += i + 1; *v >= '0' && *v <= '9'; v++) x = x * 10 + (unsigned long)(*v - '0');
+        return x;
+    }
+    return 0;
+}
+static int meminfo_open(const char *path) {
+    static const char M[] = "/proc/meminfo";
+    int i = 0;
+    while (M[i] && path[i] == M[i]) i++;
+    if (M[i] || path[i]) return -1;
+    unsigned long guest = env_ulong("AEMU_RAM_KB");
+    if (!guest) return -1;
+    char in[8192], out[8192 + 512];
+    long fd = sys3(SYS_open, (long)path, 0400000, 0);
+    if (fd < 0) return -1;
+    long total = 0;
+    for (;;) {
+        long n = sys3(SYS_read, fd, (long)(in + total), (long)sizeof(in) - 1 - total);
+        if (n <= 0) break;
+        total += n;
+        if (total >= (long)sizeof(in) - 1) break;
+    }
+    sys3(SYS_close, fd, 0, 0);
+    if (total <= 0) return -1;
+    in[total] = 0;
+    /* the host total: first number of the file (MemTotal) */
+    unsigned long host = 0;
+    const char *p = in;
+    while (*p && (*p < '0' || *p > '9')) p++;
+    while (*p >= '0' && *p <= '9') host = host * 10 + (unsigned long)(*p++ - '0');
+    if (!host || guest >= host) return -1;
+    long o = 0;
+    p = in;
+    while (*p && o < (long)sizeof(out) - 64) {
+        const char *line = p, *e = p;
+        while (*e && *e != 0x0a) e++;
+        const char *d = line;
+        while (d < e && (*d < '0' || *d > '9')) d++;
+        const char *de = d;
+        unsigned long long v = 0;
+        while (de < e && *de >= '0' && *de <= '9') v = v * 10 + (unsigned long long)(*de++ - '0');
+        int kb = de + 3 <= e && de[0] == ' ' && de[1] == 'k' && de[2] == 'B';
+        if (d < e && kb) {
+            unsigned long s = (unsigned long)udiv64(v * guest, host);
+            char num[12]; int k = 0;
+            do { num[k++] = (char)('0' + (int)(s % 10)); s /= 10; } while (s && k < 11);
+            /* keep the column: the new number ends where the old one did */
+            int extra = k - (int)(de - d);
+            const char *pe = d;
+            while (extra > 0 && pe - line >= 2 && pe[-1] == ' ' && pe[-2] == ' ') { pe--; extra--; }
+            for (const char *c = line; c < pe; c++) out[o++] = *c;
+            for (int j = (int)(de - d); j > k; j--) out[o++] = ' ';
+            while (k) out[o++] = num[--k];
+            for (const char *c = de; c < e; c++) out[o++] = *c;
+        } else {
+            for (const char *c = line; c < e; c++) out[o++] = *c;
+        }
+        if (*e) out[o++] = 0x0a;
+        p = *e ? e + 1 : e;
+    }
+    long m = sys3(SYS_memfd_create, (long)"meminfo", 0, 0);
+    if (m < 0) return -1;
+    long w = 0;
+    while (w < o) { long n = sys3(SYS_write, m, (long)(out + w), o - w); if (n <= 0) break; w += n; }
+    sys3(SYS_lseek, m, 0, 0);
+    return (int)m;
+}
+
 EXPORT int open(const char *path, int flags, ...) {
     char b[128];
     int mode = 0;
@@ -387,6 +539,8 @@ EXPORT int open(const char *path, int flags, ...) {
     }
     if (path && !(flags & 3) && path[0] == '/' && path[1] == 'p') {
         int fd = cmdline_open(path);
+        if (fd >= 0) return fd;
+        fd = meminfo_open(path);
         if (fd >= 0) return fd;
         fd = maps_open(path);
         if (fd >= 0) return fd;

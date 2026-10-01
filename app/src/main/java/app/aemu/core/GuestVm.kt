@@ -251,6 +251,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         if (img.skin.contains("MIUI", true) && img.runtime == "dalvik") overrides["dalvik.vm.dexopt-flags"] = "v=n,o=a,m=y"
         // MediaTek: звук, камера, радио ждут «NVRAM готов» от nvram_daemon, которого у нас нет
         if (TreeFixer.isMtkAudio(paths.root) || File(paths.root, "system/bin/nvram_daemon").isFile) overrides["nvram_init"] = "Ready"
+        // TouchWiz 4.1+: TvOutService and Samsung EDS look for HDMI/MHL hardware and keep crashing or blocking boot
+        if (img.api >= 16 && (img.skin.contains("TouchWiz", true) || img.skin.contains("One UI", true))) {
+            overrides["ro.tvout.enable"] = "false"
+            overrides["ro.SecEDS.enable"] = "false"
+        }
         // своя панель кнопок у нас — экранную панель гостя (4.x) прячем, чтобы не дублировать
         overrides["qemu.hw.mainkeys"] = if (s.showNavBar) "1" else "0"
         // отладка: run/props.extra — строки ключ=значение поверх всего остального
@@ -272,7 +277,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         props.serve()
         input.rateHz = s.touchHz
         input.mtMode = s.mtMode
-        input.detectHome(paths.root)
         input.serve()
         frames.serve()
         if (s.radio) ril.serve() else log("radio: emulation disabled in settings")
