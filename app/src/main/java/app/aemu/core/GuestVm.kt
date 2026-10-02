@@ -79,6 +79,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     val sensors = Sensors(ctx, paths.root, ::log)
     /** the phone's microphone for the guest (audio HAL input → /dev/aemu_mic) */
     val mic = AudioIn(ctx, paths.root, ::log)
+    /** the phone's cameras for the guest (camera HAL → /dev/socket/aemu_cam) */
+    val camera = CameraFeed(ctx, paths, ::log)
     @Volatile private var lmk: GuestLmk? = null
     val net = NetProxy(ctx, paths, ::log)
     private val dns = DnsProxy(paths, img.api, ::log)
@@ -318,6 +320,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         lights.start()
         sensors.start()
         mic.start()
+        camera.start()
         if (img.api >= 21) logd.start()
         lmk = GuestLmk(paths.root, s.lowRam, ::log, s.ramMb).also { it.start() }
         val netCfg = if (s.netProxy) net.start() else GuestRunner.NetConfig()
@@ -701,7 +704,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         log("stopping system")
         runCatching { guestRunner.run(listOf("/system/bin/sync"), 5_000) }
         killAll()
-        adb.stop(); props.stop(); input.stop(); frames.stop(); ril.stop(); vold.stop(); audio.stop(); net.stop(); dns.stop(); events.stop(); logd.stop(); lights.stop(); sensors.stop(); mic.stop()
+        adb.stop(); props.stop(); input.stop(); frames.stop(); ril.stop(); vold.stop(); audio.stop(); net.stop(); dns.stop(); events.stop(); logd.stop(); lights.stop(); sensors.stop(); mic.stop(); camera.stop()
         extraStubs.forEach { it.stop() }; extraStubs.clear()
         lmk?.stop(); lmk = null
         Keeper.release(ctx)

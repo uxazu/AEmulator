@@ -223,6 +223,7 @@ class VmActivity : ComponentActivity() {
         logLines.addAll(vm.lines().takeLast(200))
         vm.onState { st -> runOnUiThread { state = st } }
         vm.mic.onPermissionNeeded = { runOnUiThread { askMic.launch(android.Manifest.permission.RECORD_AUDIO) } }
+        vm.camera.onPermissionNeeded = { runOnUiThread { askCamera.launch(android.Manifest.permission.CAMERA) } }
         led = vm.lights.current
         vm.lights.onChange { l -> runOnUiThread { led = l } }
         vm.onLog { line -> runOnUiThread { logLines.add(line); if (logLines.size > 400) logLines.removeRange(0, logLines.size - 400) } }
@@ -331,6 +332,8 @@ class VmActivity : ComponentActivity() {
     private fun saveMenuOffset() { uiPrefs.edit().putFloat("menu_x", menuOffset.x).putFloat("menu_y", menuOffset.y).apply() }
 
     private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) vm.mic.permissionGranted() }
+
+    private val askCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private fun toast(msg: String) = runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
 
