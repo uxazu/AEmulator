@@ -31,12 +31,12 @@ struct hw_module {
     const char *id, *name, *author;
     struct hw_module_methods *methods;
     void *dso;
-    uint32_t reserved[25];
+    unsigned long reserved[25]; /* uint32 on 32-bit, uint64 on 64-bit */
 };
 struct hw_device {
     uint32_t tag, version;
     struct hw_module *module;
-    uint32_t reserved[12];
+    unsigned long reserved[12];
     int (*close)(struct hw_device *dev);
 };
 struct light_state { uint32_t color; int flash_mode, flash_on_ms, flash_off_ms, brightness_mode; };

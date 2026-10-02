@@ -305,6 +305,24 @@ class TreeFixer(
                 copied++
             }.onFailure { log("$n: ${it.message}") }
         }
+        // mediaserver of a 6.0 arm64 firmware is a 32-bit program (it runs through qemu-arm): camera and sound
+        // reach the phone through the same 32-bit HALs as on the other engines
+        if (File(root, "system/bin/mediaserver").let { it.isFile && !isElf64(it) }) {
+            for ((asset, to) in listOf("engines/common/camera.default.so" to "system/lib/hw/camera.default.so",
+                "engines/kk/audio.primary.aosp.so" to "system/lib/hw/audio.primary.default.so")) {
+                val dst = File(root, to)
+                val size = runCatching { ctx.assets.openFd(asset).use { it.length } }.getOrDefault(-1L)
+                if (dst.isFile && size >= 0 && dst.length() == size && sameContent(asset, dst)) continue
+                runCatching {
+                    dst.parentFile?.mkdirs()
+                    val parked = File(root, "system/.aemu-parked/${to.replace('/', '#')}")
+                    parked.parentFile?.mkdirs()
+                    if (dst.isFile && !parked.exists()) dst.renameTo(parked)
+                    ctx.assets.open(asset).use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
+                    dst.setReadable(true, false); copied++
+                }.onFailure { log("$to: ${it.message}") }
+            }
+        }
         // the Java stubs (bluetooth manager, network, tool runner) are dex code: the same jar as for 32-bit guests
         runCatching {
             val jar = File(root, "system/framework/aemu-stubs.jar")
@@ -526,6 +544,10 @@ class TreeFixer(
             }
         }
     }
+
+    private fun isElf64(f: File): Boolean = runCatching {
+        f.inputStream().use { i -> val b = ByteArray(5); i.read(b) == 5 && b[4] == 2.toByte() }
+    }.getOrDefault(false)
 
     private fun sameContent(asset: String, f: File): Boolean = runCatching {
         fun crc(i: java.io.InputStream): Long {

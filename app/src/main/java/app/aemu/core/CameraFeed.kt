@@ -88,12 +88,15 @@ class CameraFeed(private val ctx: Context, private val paths: VmPaths, private v
             cm.openCamera(id, object : CameraDevice.StateCallback() {
                 override fun onOpened(d: CameraDevice) {
                     device = d
-                    val req = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(ir.surface) }
-                    @Suppress("DEPRECATION")
-                    d.createCaptureSession(listOf(ir.surface), object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(s: CameraCaptureSession) { runCatching { s.setRepeatingRequest(req.build(), null, handler) } }
-                        override fun onConfigureFailed(s: CameraCaptureSession) { log("camera: session not configured") }
-                    }, handler)
+                    // the guest may have closed the camera already (mediaserver only probes it at start)
+                    runCatching {
+                        val req = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(ir.surface) }
+                        @Suppress("DEPRECATION")
+                        d.createCaptureSession(listOf(ir.surface), object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(s: CameraCaptureSession) { runCatching { s.setRepeatingRequest(req.build(), null, handler) } }
+                            override fun onConfigureFailed(s: CameraCaptureSession) { log("camera: session not configured") }
+                        }, handler)
+                    }.onFailure { runCatching { d.close() }; return }
                     log("camera: ${if (front) "front" else "back"} camera opened for the guest")
                 }
                 override fun onDisconnected(d: CameraDevice) { d.close() }

@@ -470,7 +470,14 @@ static long trap2(long nr, long *a, void *uc, char **pbp) {
     case NR_removexattr: case NR_lremovexattr: {
         char *b0 = PB(0);
         NEEDX(0);
-        return S5(nr, h0, a[1], a[2], a[3], a[4]);
+        long r = S5(nr, h0, a[1], a[2], a[3], a[4]);
+        if (nr == NR_statfs && r == 0) {
+            // a nearly full phone reads as a nearly full guest disk (no dropbox, low-storage modes): the guest's disk
+            // is what is still free plus as much again
+            u64 *s = (u64 *)a[1];               /* type, bsize, blocks, bfree, bavail */
+            if (s[4] && s[2] > 2 * s[4]) { s[2] = 2 * s[4]; if (s[3] > s[2]) s[3] = s[2]; }
+        }
+        return r;
     }
     case NR_inotify_add_watch: {
         char *b1 = PB(0);

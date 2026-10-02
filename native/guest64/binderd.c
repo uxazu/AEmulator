@@ -408,7 +408,8 @@ static void deliver(struct thread *th) {
     if (room > 40) room = 40;
     struct txn *t = 0;
     struct wq *q = th->todo.head ? &th->todo : &p->todo;
-    while (q->head && !t) {
+    int stop = 0;
+    while (q->head && !t && !stop) {
         struct work *w = q->head;
         if (w->type != W_TXN && k + 20 > room) break;
         wq_pop(q);
@@ -416,7 +417,9 @@ static void deliver(struct thread *th) {
         case W_COMPLETE: br[k++] = BR_TRANSACTION_COMPLETE; break;
         case W_ERROR: br[k++] = w->err; break;
         case W_NODE: w->node->queued = 0; k += emit_node(w->node, br + k); node_free_if_unused(w->node); break;
-        case W_DEAD_BINDER: br[k] = BR_DEAD_BINDER; memcpy(br + k + 1, &w->cookie, 8); k += 3; break;
+        case W_DEAD_BINDER: br[k] = BR_DEAD_BINDER; memcpy(br + k + 1, &w->cookie, 8); k += 3;
+            stop = 1;       /* the death recipient may make calls of its own: nothing may follow it in this batch (as in the driver) */
+            break;
         case W_CLEAR_DONE: br[k] = BR_CLEAR_DEATH_NOTIFICATION_DONE; memcpy(br + k + 1, &w->cookie, 8); k += 3; break;
         case W_TXN: t = w->t; break;
         }

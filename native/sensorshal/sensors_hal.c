@@ -34,12 +34,12 @@ struct hw_module {
     const char *id, *name, *author;
     struct hw_module_methods *methods;
     void *dso;
-    uint32_t reserved[25];
+    unsigned long reserved[25]; /* uint32 on 32-bit, uint64 on 64-bit */
 };
 struct hw_device {
     uint32_t tag, version;
     struct hw_module *module;
-    uint32_t reserved[12];
+    unsigned long reserved[12];
     int (*close)(struct hw_device *dev);
 };
 
@@ -50,8 +50,8 @@ struct sensor_t {
     int32_t minDelay;
     uint32_t fifoReservedEventCount, fifoMaxEventCount;
     const char *stringType, *requiredPermission;
-    int32_t maxDelay;
-    uint32_t flags;
+    long maxDelay;          /* 64-bit wide on LP64 */
+    unsigned long flags;
     void *reserved[2];
 };
 struct sensors_event_t {
