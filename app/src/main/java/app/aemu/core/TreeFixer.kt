@@ -279,6 +279,31 @@ class TreeFixer(
         if (n > 0) log("Qualcomm: vendor services set aside: $n")
     }
 
+    /** Native arm64 engine: its HALs and libraries are arm64 files from assets/engines/n64, named "a#b#c" for a/b/c. */
+    private fun installNative64() {
+        val names = runCatching { ctx.assets.list("engines/n64") }.getOrNull() ?: return
+        var copied = 0
+        for (n in names) {
+            val dst = File(root, n.replace('#', '/'))
+            val asset = "engines/n64/$n"
+            val size = runCatching { ctx.assets.openFd(asset).use { it.length } }.getOrDefault(-1L)
+            if (dst.isFile && size >= 0 && dst.length() == size && sameContent(asset, dst)) continue
+            runCatching {
+                dst.parentFile?.mkdirs()
+                if (isLink(dst)) Os.remove(dst.absolutePath)
+                else if (dst.isFile) {          // the firmware's own file is kept aside
+                    val parked = File(root, "system/.aemu-parked/$n")
+                    parked.parentFile?.mkdirs()
+                    if (!parked.exists()) dst.renameTo(parked)
+                }
+                ctx.assets.open(asset).use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
+                dst.setReadable(true, false); dst.setExecutable(true, false)
+                copied++
+            }.onFailure { log("$n: ${it.message}") }
+        }
+        if (copied > 0) log("engine n64 files updated: $copied")
+    }
+
     private fun installEngineFiles() {
         val copies = when (engine) {
             Engine.KK -> listOf(
@@ -295,6 +320,7 @@ class TreeFixer(
                 "gralloc.default.so" to "system/lib/hw/gralloc.default.so",
                 "fbpaint" to "system/bin/fbpaint",
             )
+            Engine.N64 -> return installNative64()
         }
         // a static network debugging tool shipped by older versions; nothing runs it
         File(root, "system/bin/netprobe").delete()
@@ -418,6 +444,7 @@ class TreeFixer(
         val cfgRom = File(dir, "egl.cfg.rom")
         if (!cfgRom.isFile && cfg.isFile) cfg.copyTo(cfgRom, overwrite = true)
         when (engine) {
+            Engine.N64 -> {}
             Engine.GB -> cfg.writeText(if (gpu) "0 0 dhd\n" else "0 0 android\n")
             Engine.KK -> {
                 // сам мост лежит как libGLES_bridge.so; все имена, которые ищут загрузчики EGL (libGLES.so у 4.4,

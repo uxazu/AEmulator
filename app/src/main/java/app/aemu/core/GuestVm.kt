@@ -222,7 +222,14 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }
         overrides["ro.sf.lcd_density"] = s.density.toString()
         overrides["qemu.sf.lcd_density"] = s.density.toString()
-        overrides["ro.aemu.host"] = "qemu-user"
+        overrides["ro.aemu.host"] = if (engine == Engine.N64) "native" else "qemu-user"
+        if (engine == Engine.N64) {
+            // the phone runs arm64 code only: one 64-bit zygote, no 32-bit side
+            overrides["ro.zygote"] = "zygote64"
+            overrides["ro.product.cpu.abilist"] = "arm64-v8a"
+            overrides["ro.product.cpu.abilist64"] = "arm64-v8a"
+            overrides["ro.product.cpu.abilist32"] = ""
+        }
         overrides["dalvik.vm.execution-mode"] = if (s.jit) "int:jit" else "int:fast"
         if (s.lowRam || s.ramMb in 1..768) overrides["ro.config.low_ram"] = "true"
         if (s.ramMb > 0) {
@@ -242,9 +249,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // ART first boot compiles every app with dex2oat under qemu (minutes, single-threaded): by default only
         // skip it (verify-none: ART verifies classes lazily when an app runs) and use several threads; "full compilation" in the settings keeps machine code
         if (img.api >= 21) {
-            if (!s.fullDexopt) overrides["dalvik.vm.dex2oat-filter"] = "verify-none"
+            if (!s.fullDexopt && engine != Engine.N64) overrides["dalvik.vm.dex2oat-filter"] = "verify-none"
             // 7.0+: PackageManager picks the filter per reason from pm.dexopt.*
-            if (img.api >= 24 && !s.fullDexopt) for (r in listOf("first-boot", "boot", "install", "bg-dexopt", "ab-ota", "core-app", "forced-dexopt", "nsys-library"))
+            if (img.api >= 24 && !s.fullDexopt && engine != Engine.N64) for (r in listOf("first-boot", "boot", "install", "bg-dexopt", "ab-ota", "core-app", "forced-dexopt", "nsys-library"))
                 overrides["pm.dexopt.$r"] = "verify-none"
             overrides["dalvik.vm.dex2oat-flags"] = "-j" + Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
             // 6.0 relocates the boot image to a random address (patchoat), which fails under qemu: keep it in place
@@ -383,6 +390,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         val sock = paths.binderSock.absolutePath
         when (engine) {
             Engine.KK -> spawn("binderd", listOf(paths.nativeBin(engine.binderd).absolutePath, "-s", sock), emptyMap())
+            Engine.N64 -> spawn("binderd", listOf(paths.nativeBin(engine.binderd).absolutePath, sock),
+                if (File(paths.bin, "binder.verbose").exists()) mapOf("AEMU_BINDER_VERBOSE" to "1") else emptyMap())
             Engine.GB -> if (File(paths.bin, "binderd.kk").exists()) {
                 // эксперимент: более новый binderd движка KK
                 spawn("binderd", listOf(paths.nativeBin(Engine.KK.binderd).absolutePath, "-s", sock), emptyMap())
@@ -399,6 +408,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         paths.glSock.parentFile?.mkdirs()
         paths.glSock.delete()
         when (engine) {
+            Engine.N64 -> log("native arm64: graphics are served by the engine's own HALs")
             Engine.GB -> {
                 Slot.start(ctx, GlSlot::class.java,
                     listOf("glserverd", "-s", paths.glSock.absolutePath, "-fb", paths.fb.absolutePath, "-w", "$w", "-h", "$h"),
@@ -432,6 +442,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             log("· ${svc.name}: ${svc.argv.first()} missing, skipping")
             return
         }
+        if (engine == Engine.N64 && !paths.nativeBin("libqemu_arm.so").canExecute() && !runsNatively(File(paths.root, svc.argv.first().removePrefix("/")))) {
+            log("· ${svc.name}: 32-bit program, skipped by the native arm64 engine")
+            return
+        }
         val extra = LinkedHashMap<String, String>()
         for ((sock, mode) in svc.sockets) extra["DHD_SOCK_$sock"] = "${paths.socket(sock).absolutePath},$mode"
         if (svc.uid != 0) { extra["DHD_UID"] = svc.uid.toString(); extra["DHD_GID"] = svc.gid.toString() }
@@ -442,8 +456,17 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             svc.argv.take(1) + "-Xint:fast" + svc.argv.drop(1) else svc.argv
         // отладка: файл run/strace.<служба> включает трассировку системных вызовов qemu
         if (File(paths.bin, "strace.${svc.name}").exists()) extra["QEMU_STRACE"] = "1"
+        if (engine == Engine.N64 && props != null) extra["AEMU64_PROPS_FILE"] = props.absolutePath
         spawn(svc.name, guestRunner.cmdline(argv, props), guestRunner.env(extra))
     }
+
+    /** a 64-bit ELF or a script */
+    private fun runsNatively(f: File): Boolean = runCatching {
+        f.inputStream().use { i ->
+            val b = ByteArray(5)
+            i.read(b) == 5 && ((b[0] == 0x7f.toByte() && b[4] == 2.toByte()) || b[0] == 0x23.toByte())
+        }
+    }.getOrDefault(false)
 
     private fun spawn(name: String, cmd: List<String>, env: Map<String, String>) {
         val log = paths.log(name)
@@ -728,7 +751,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             val pid = d.name.toIntOrNull() ?: return@forEach
             if (pid == mine) return@forEach
             val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1).replace('\u0000', ' ') }.getOrNull() ?: return@forEach
-            val ours = (cmd.contains("/images/") && (cmd.contains("libqemu") || cmd.contains("libbinderd") || cmd.contains("libdhdrun") || cmd.contains("libglserverd"))) ||
+            val ours = cmd.contains("libaemu64") || cmd.contains("libbinderd64") || (cmd.contains("/images/") && (cmd.contains("libqemu") || cmd.contains("libbinderd") || cmd.contains("libdhdrun") || cmd.contains("libglserverd"))) ||
                 cmd.startsWith("${ctx.packageName}:binder") || cmd.startsWith("${ctx.packageName}:gl")
             if (ours) { runCatching { AProcess.sendSignal(pid, 9) }; n++ }
         }

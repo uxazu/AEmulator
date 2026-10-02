@@ -38,6 +38,7 @@ class GuestRunner(
         val prog = argv.first()
         val host = File(paths.root, prog.removePrefix("/")).absolutePath
         val cmd = ArrayList<String>()
+        if (engine == Engine.N64) return listOf(qemu.absolutePath, prog) + argv
         val props = propsFile ?: paths.props
         if (runner.canExecute() && props.isFile) {
             cmd += runner.absolutePath; cmd += props.absolutePath; cmd += "30"
@@ -55,7 +56,41 @@ class GuestRunner(
         return cmd
     }
 
+    /** Native arm64 guest: libaemu64 redirects paths itself, the firmware's own linker and libraries run as they are. */
+    private fun env64(extra: Map<String, String>): Map<String, String> {
+        val e = LinkedHashMap<String, String>()
+        for ((k, v) in img.exports) if (k !in EXPORTS_SKIP) e[k] = v
+        e["PATH"] = img.exports["PATH"] ?: "/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin"
+        e["LD_LIBRARY_PATH"] = "/vendor/lib64:/system/lib64"
+        e["ANDROID_ROOT"] = img.exports["ANDROID_ROOT"] ?: "/system"
+        e["ANDROID_DATA"] = img.exports["ANDROID_DATA"] ?: "/data"
+        e["ANDROID_ASSETS"] = img.exports["ANDROID_ASSETS"] ?: "/system/app"
+        e["EXTERNAL_STORAGE"] = img.exports["EXTERNAL_STORAGE"] ?: img.sdcardPath
+        e["BOOTCLASSPATH"] = img.bootclasspath
+        e.putIfAbsent("EMULATED_STORAGE_SOURCE", "/mnt/shell/emulated")
+        e.putIfAbsent("EMULATED_STORAGE_TARGET", "/storage/emulated")
+        e["HOME"] = "/data"; e["TMPDIR"] = "/data/local/tmp"; e["TZ"] = "UTC"
+        e["AEMU64_ROOT"] = paths.root.absolutePath
+        e["AEMU64_PROPS"] = paths.props.absolutePath
+        e["AEMU64_BINDER"] = paths.binderSock.absolutePath
+        e["AEMU64_INPUT"] = paths.inputSock.absolutePath
+        paths.nativeBin("libqemu_arm.so").takeIf { it.canExecute() }?.let { e["AEMU64_QEMU"] = it.absolutePath }
+        e["AEMU64_FB"] = "${img.settings.width}x${img.settings.height}"
+        // debugging: run/crash.report makes the runner print pc/lr and their mappings on a fatal signal
+        if (File(paths.bin, "crash.report").exists()) e["AEMU64_CRASH"] = "1"
+        for (t in userTokens.filter(::isEnvToken)) e[t.substringBefore('=')] = t.substringAfter('=')
+        for ((k, v) in extra) when {
+            k.startsWith("DHD_SOCK_") -> e["AEMU64_SOCK_" + k.removePrefix("DHD_SOCK_")] = v
+            k == "DHD_UID" -> e["AEMU64_ID"] = v + "," + (extra["DHD_GID"] ?: v)
+            k == "DHD_GID" -> {}
+            k == "AEMU64_PROPS_FILE" -> e["AEMU64_PROPS"] = v
+            else -> e[k] = v
+        }
+        return e
+    }
+
     fun env(extra: Map<String, String> = emptyMap()): Map<String, String> {
+        if (engine == Engine.N64) return env64(extra)
         val s = img.settings
         val e = LinkedHashMap<String, String>()
         // переменные из init.rc прошивки (export …), кроме тех, что задаём сами
