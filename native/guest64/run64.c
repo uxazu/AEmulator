@@ -525,10 +525,11 @@ static long trap2(long nr, long *a, void *uc, char **pbp) {
             if (ps.st_ino && S2(NR_fstat, a[4], &fs) == 0 && fs.st_ino == ps.st_ino && fs.st_dev == ps.st_dev) {
                 long r = S6(nr, a[0], a[1], 3, (a[3] & ~1L) | 2, a[4], a[5]);
                 if (r < 0 && r > -4096) return S6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
-                static const char key[] = "ro.kernel.qemu.gles";
+                static const char *const key[] = { "ro.kernel.qemu.gles", "qemu.gles", 0 };   // libEGL's and hwui's
                 char *m = (char *)r; u64 len = (u64)a[1];
-                for (u64 i = 96; i + sizeof key <= len; i += 4)
-                    if (m[i] == 'r' && m[i + 1] == 'o' && seq(m + i, key)) { if (m[i - 92] == '1' && !m[i - 91]) m[i - 92] = '0'; break; }
+                for (int k = 0; key[k]; k++)
+                    for (u64 i = 96; i + 24 <= len; i += 4)
+                        if (m[i] == key[k][0] && seq(m + i, key[k])) { if (m[i - 92] == '1' && !m[i - 91]) m[i - 92] = '0'; break; }
                 S3(NR_mprotect, r, a[1], 1);
                 return r;
             }

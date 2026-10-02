@@ -380,6 +380,10 @@ class TreeFixer(
                 }
             }
             val egl32 = File(root, "system/lib/egl")
+            // an image that ran on the 4.4 engine before has our GL shim under the renderer's name
+            File(egl32, "libGLES_android.so.sw").let { sw ->
+                if (sw.isFile) { File(egl32, "libGLES_android.so").delete(); sw.renameTo(File(egl32, "libGLES_android.so")) }
+            }
             if (File(egl32, "libGLES_android.so").isFile) {
                 for (n in listOf("libGLES_aemu.so", "libGLES_bridge.so", "libEGL_aemu.so", "libGLESv1_CM_aemu.so", "libGLESv2_aemu.so", "libGLES.so"))
                     File(egl32, n).let { if (isLink(it)) Os.remove(it.absolutePath) else it.delete() }
