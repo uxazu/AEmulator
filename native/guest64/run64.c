@@ -426,7 +426,14 @@ static long trap2(long nr, long *a, void *uc, char **pbp) {
         char *b1 = PB(0);
         NEEDX(1);
         long r = S4(nr, a[0], h1, a[2], a[3]);
-        if (r == 0) fake_owner((struct kstat *)a[2]);
+        if (r == 0) {
+            struct kstat *st = (struct kstat *)a[2];
+            fake_owner(st);
+            // an app's own data belongs to the app (the class loader refuses an oat directory of another owner)
+            if (g_uid >= 10000 && st->st_uid == 0 && a[1] && (pre(P(1), "/data/data/") || pre(P(1), "/data/user/"))) {
+                st->st_uid = (u32)g_uid; st->st_gid = (u32)g_gid;
+            }
+        }
         return r;
     }
     case NR_fstat: {
