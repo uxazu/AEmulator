@@ -182,4 +182,7 @@
     <string name="update_error">Не удалось проверить обновления: %1$s</string>
     <string name="update_download_error">Ошибка загрузки: %1$s</string>
     <string name="update_open_github">Открыть на GitHub</string>
+    <string name="lib_title">Библиотека прошивок</string>
+    <string name="lib_empty">Прошивок пока нет: импортируйте файл прошивки, чтобы создать первую машину.</string>
+    <string name="new_machine">Новая машина</string>
 </resources>

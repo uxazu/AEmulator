@@ -183,4 +183,7 @@
     <string name="update_error">Failed to check for updates: %1$s</string>
     <string name="update_download_error">Download failed: %1$s</string>
     <string name="update_open_github">View on GitHub</string>
+    <string name="lib_title">Firmware library</string>
+    <string name="lib_empty">No firmware yet: import a firmware file to create the first machine.</string>
+    <string name="new_machine">New machine</string>
 </resources>

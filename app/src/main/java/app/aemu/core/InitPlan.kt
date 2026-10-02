@@ -180,7 +180,9 @@ object InitPlan {
         "servicemanager" -> GuestService("servicemanager", listOf("/system/bin/servicemanager"))
         "surfaceflinger" -> if (api >= 14) GuestService("surfaceflinger", listOf("/system/bin/surfaceflinger")) else null
         "healthd" -> if (File(root, "sbin/healthd").isFile) GuestService("healthd", listOf("/sbin/healthd")) else null
-        "keystore" -> GuestService("keystore", listOf("/system/bin/keystore", "/data/misc/keystore"))
+        // up to 4.2 keystore serves its own control socket and exits at once without it (4.3+: binder)
+        "keystore" -> GuestService("keystore", listOf("/system/bin/keystore", "/data/misc/keystore"),
+            if (api <= 17) mapOf("keystore" to "0666") else emptyMap())
         "installd" -> GuestService("installd", listOf("/system/bin/installd"), mapOf("installd" to "0600"))
         "netd" -> GuestService("netd", listOf("/system/bin/netd"),
             if (api >= 14) mapOf("netd" to "0660", "dnsproxyd" to "0660", "mdns" to "0660") else mapOf("netd" to "0660"))

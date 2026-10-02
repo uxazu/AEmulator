@@ -33,6 +33,17 @@ object BootImage {
             val rd = img.copyOfRange(off.toInt(), (off + len).toInt())
             return cpio(decompress(rd) ?: return null)
         }
+        // Sony (kernel.sin, Xperia 2012–2016): an ELF whose segments are the kernel, the ramdisk (gzip cpio) and the cmdline
+        if (img.size > 64 && img[0] == 0x7f.toByte() && img[1] == 'E'.code.toByte() && img[2] == 'L'.code.toByte() && img[3] == 'F'.code.toByte()) {
+            for (i in 0 until img.size - 3) {
+                if (img[i] != 0x1f.toByte() || img[i + 1] != 0x8b.toByte() || img[i + 2] != 0x08.toByte()) continue
+                val inner = runCatching { gunzipLenient(img.copyOfRange(i, img.size)) }.getOrNull() ?: continue
+                if (inner.size > 6 && String(inner, 0, 6, Charsets.ISO_8859_1) == "070701") {
+                    val entries = runCatching { cpio(inner) }.getOrNull() ?: continue
+                    if (entries.any { it.name == "init.rc" }) return entries
+                }
+            }
+        }
         // иначе — zImage со встроенным initramfs
         return fromZImage(img)
     }

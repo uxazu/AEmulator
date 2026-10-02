@@ -144,6 +144,7 @@ fun Library(model: LibraryModel) {
     var renameFor by remember { mutableStateOf<GuestImage?>(null) }
     var help by remember { mutableStateOf(false) }
     var addMenu by remember { mutableStateOf(false) }
+    var library by remember { mutableStateOf(false) }
     var containerFrom by remember { mutableStateOf<GuestImage?>(null) }
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -195,47 +196,38 @@ fun Library(model: LibraryModel) {
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { if (images.isEmpty()) pick.launch(arrayOf("*/*")) else addMenu = true },
-                icon = { Icon(Icons.Rounded.Add, null) },
-                text = { Text(stringResource(R.string.add_firmware)) },
-                expanded = images.isEmpty() || !scroll.state.collapsedFraction.let { it > 0.5f },
-            )
+            HomeFab(expanded = addMenu, onToggle = { addMenu = it },
+                onImport = { pick.launch(arrayOf("*/*")) }, onLibrary = { library = true })
         },
     ) { pad ->
-        Box(Modifier.fillMaxSize().padding(pad)) {
-            if (images.isEmpty() && !imp.active) EmptyState(onHelp = { help = true })
-            LazyColumn(
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                item { StorageAccessCard() }
-                item { if (!imp.active) FirmwareFolderCard(onImport = { f -> model.import(android.net.Uri.fromFile(f)) }) }
-                item {
-                    AnimatedVisibility(imp.active || imp.error != null || imp.done != null) {
-                        ImportCard(imp, onCancel = model::cancelImport, onDismiss = model::dismissImport)
-                    }
+        val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> androidx.compose.foundation.lazy.grid.GridItemSpan =
+            { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }
+        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+            columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(148.dp),
+            modifier = Modifier.fillMaxSize().padding(pad),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item(span = full) { StorageAccessCard() }
+            item(span = full) {
+                AnimatedVisibility(imp.active || imp.error != null || imp.done != null) {
+                    ImportCard(imp, onCancel = model::cancelImport, onDismiss = model::dismissImport)
                 }
-                // two sections: imported firmwares ("systems") and the containers made from them
-                val systems = images.filter { it.baseId.isEmpty() }
-                val containers = images.filter { it.baseId.isNotEmpty() }
-                for ((title, list) in listOf(R.string.section_systems to systems, R.string.section_containers to containers)) {
-                    if (list.isEmpty()) continue
-                    item(key = "h$title") {
-                        Text(stringResource(title), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(start = 4.dp, top = 8.dp))
-                    }
-                    items(list, key = { it.id }) { img ->
-                        ImageCard(
-                            img,
-                            onStart = { VmActivity.start(ctx, img.id) },
-                            onSettings = { settingsFor = img },
-                            onRename = { renameFor = img },
-                            onDelete = { deleteFor = img },
-                            baseName = images.firstOrNull { it.id == img.baseId }?.name,
-                        )
-                    }
-                }
+            }
+            if (images.isEmpty() && !imp.active) item(span = full) { EmptyState(onHelp = { help = true }) }
+            items(images.size, key = { images[it].id }) { i ->
+                val img = images[i]
+                MachineCard(
+                    img,
+                    baseName = images.firstOrNull { it.id == img.baseId }?.name,
+                    modifier = Modifier.animateItem(),
+                    onStart = { VmActivity.start(ctx, img.id) },
+                    onSettings = { settingsFor = img },
+                    onRename = { renameFor = img },
+                    onNewMachine = { containerFrom = img },
+                    onDelete = { deleteFor = img },
+                )
             }
         }
     }
@@ -265,9 +257,10 @@ AlertDialog(
         )
     }
     if (help) HelpDialog(onDismiss = { help = false })
-    if (addMenu) AddSheet(images, onDismiss = { addMenu = false },
-        onImport = { addMenu = false; pick.launch(arrayOf("*/*")) },
-        onContainer = { addMenu = false; containerFrom = it })
+    if (library) LibrarySheet(images.filter { it.baseId.isEmpty() }, onDismiss = { library = false },
+        onImportFile = { library = false; pick.launch(arrayOf("*/*")) },
+        onImportFolder = { f -> library = false; model.import(android.net.Uri.fromFile(f)) },
+        onNewMachine = { library = false; containerFrom = it })
     containerFrom?.let { src -> ContainerDialog(src, images, onDismiss = { containerFrom = null },
         onCreate = { from, name, copy -> containerFrom = null; model.clone(from, name, copy) }) }
 
@@ -282,24 +275,6 @@ AlertDialog(
         onInstall = { file -> AppUpdateManager.installApk(ctx, file) },
         onOpenUrl = { url -> runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) } }
     )
-}
-
-/** The "+" menu: a firmware file, or a new container of a firmware already here. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AddSheet(images: List<GuestImage>, onDismiss: () -> Unit, onImport: () -> Unit, onContainer: (GuestImage) -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ListItem(headlineContent = { Text(stringResource(R.string.add_import)) },
-                supportingContent = { Text(stringResource(R.string.add_import_sub)) },
-                leadingContent = { Icon(Icons.Rounded.FileOpen, null) },
-                modifier = Modifier.clip(MaterialTheme.shapes.large).clickable(onClick = onImport))
-            ListItem(headlineContent = { Text(stringResource(R.string.add_container)) },
-                supportingContent = { Text(stringResource(R.string.add_container_sub)) },
-                leadingContent = { Icon(Icons.Rounded.ContentCopy, null) },
-                modifier = Modifier.clip(MaterialTheme.shapes.large).clickable { images.firstOrNull()?.let(onContainer) })
-        }
-    }
 }
 
 @Composable
@@ -330,38 +305,6 @@ private fun ContainerDialog(src: GuestImage, images: List<GuestImage>, onDismiss
         confirmButton = { Button(onClick = { onCreate(from, name.trim().ifEmpty { from.name }, copy) }) { Text(stringResource(R.string.container_create)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
-}
-
-/** Firmware found in Internal storage/aemulator/firmware, rescanned whenever the screen comes back. */
-@Composable
-private fun FirmwareFolderCard(onImport: (java.io.File) -> Unit) {
-    var files by remember { mutableStateOf(emptyList<java.io.File>()) }
-    val life = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    androidx.compose.runtime.DisposableEffect(life) {
-        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
-            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) Thread { files = app.aemu.core.FirmwareFolder.list() }.start()
-        }
-        life.lifecycle.addObserver(obs)
-        onDispose { life.lifecycle.removeObserver(obs) }
-    }
-    if (files.isEmpty()) return
-    Card(shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-        Column(Modifier.padding(20.dp)) {
-            Text(stringResource(R.string.fw_folder_title), style = MaterialTheme.typography.titleMedium)
-            Text("aemulator/firmware", style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.height(8.dp))
-            for (f in files.take(8)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(f.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        Text("${f.length() / 1_048_576} MB", style = MaterialTheme.typography.bodySmall)
-                    }
-                    androidx.compose.material3.FilledTonalButton(onClick = { onImport(f) }) { Text(stringResource(R.string.fw_folder_import)) }
-                }
-            }
-        }
-    }
 }
 
 /** Доступ ко всем файлам: общая папка гостя в «Внутренний накопитель/AEmulator». */
@@ -445,51 +388,6 @@ private fun ImportCard(s: ImportState, onCancel: () -> Unit, onDismiss: () -> Un
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 if (s.active) TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) } else TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ImageCard(img: GuestImage, onStart: () -> Unit, onSettings: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, baseName: String? = null) {
-    val ctx = LocalContext.current
-    Card(shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(52.dp)) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(img.release.take(3), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                    }
-                }
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(img.name, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(img.displayVersion, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AssistChip(onClick = {}, label = { Text(img.skin) })
-
-                AssistChip(onClick = {}, label = { Text("${img.settings.width}×${img.settings.height}") })
-                AssistChip(onClick = {}, label = { Text(Formatter.formatShortFileSize(ctx, img.sizeBytes)) })
-            }
-            if (baseName != null) Text(stringResource(R.string.container_of, baseName), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (img.lastBootMs > 0) Text(stringResource(R.string.last_boot, (img.lastBootMs / 1000).toInt()), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            img.warnings.firstOrNull()?.let { Text("⚠ $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary) }
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = onStart, contentPadding = ButtonDefaults.ButtonWithIconContentPadding, modifier = Modifier.height(48.dp)) {
-                    Icon(Icons.Rounded.PlayArrow, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.start))
-                }
-                Spacer(Modifier.weight(1f))
-                FilledTonalIconButton(onClick = onSettings) { Icon(Icons.Rounded.Tune, stringResource(R.string.settings)) }
-                FilledTonalIconButton(onClick = onRename) { Icon(Icons.Rounded.Edit, stringResource(R.string.rename)) }
-                FilledTonalIconButton(onClick = onDelete) { Icon(Icons.Rounded.Delete, stringResource(R.string.delete)) }
             }
         }
     }

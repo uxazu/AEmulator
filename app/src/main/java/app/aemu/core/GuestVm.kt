@@ -73,6 +73,12 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     val frames = FrameBell(paths, ::log) { onFrame?.invoke() }
     private val events = EventsSink(paths, ::log)
     private val logd = LogdSink(paths, ::log)
+    /** notification / battery LED of the guest (lights HAL → /dev/aemu_lights) */
+    val lights = Lights(paths.root, ::log)
+    /** the phone's accelerometer and vibration motor for the guest */
+    val sensors = Sensors(ctx, paths.root, ::log)
+    /** the phone's microphone for the guest (audio HAL input → /dev/aemu_mic) */
+    val mic = AudioIn(ctx, paths.root, ::log)
     @Volatile private var lmk: GuestLmk? = null
     val net = NetProxy(ctx, paths, ::log)
     private val dns = DnsProxy(paths, img.api, ::log)
@@ -309,6 +315,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             log("audio: MediaTek, emulator HAL via /dev/aemu_pcm")
         } else { audio.makeFifo(); audio.start() }
         events.start()
+        lights.start()
+        sensors.start()
+        mic.start()
         if (img.api >= 21) logd.start()
         lmk = GuestLmk(paths.root, s.lowRam, ::log, s.ramMb).also { it.start() }
         val netCfg = if (s.netProxy) net.start() else GuestRunner.NetConfig()
@@ -692,7 +701,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         log("stopping system")
         runCatching { guestRunner.run(listOf("/system/bin/sync"), 5_000) }
         killAll()
-        adb.stop(); props.stop(); input.stop(); frames.stop(); ril.stop(); vold.stop(); audio.stop(); net.stop(); dns.stop(); events.stop(); logd.stop()
+        adb.stop(); props.stop(); input.stop(); frames.stop(); ril.stop(); vold.stop(); audio.stop(); net.stop(); dns.stop(); events.stop(); logd.stop(); lights.stop(); sensors.stop(); mic.stop()
         extraStubs.forEach { it.stop() }; extraStubs.clear()
         lmk?.stop(); lmk = null
         Keeper.release(ctx)

@@ -330,7 +330,8 @@ class TreeFixer(
                 runCatching { Os.symlink("libGLES_android.so", sw.path) }
         }
         for ((from, to) in (copies + nougat).filter { !noBridge || !it.second.startsWith("system/lib/egl/libGLES_") } +
-            listOf("@libaemushim.so" to "system/lib/libaemushim.so")) {
+            listOf("@libaemushim.so" to "system/lib/libaemushim.so", "@lights.default.so" to "system/lib/hw/lights.default.so",
+                "@sensors.default.so" to "system/lib/hw/sensors.default.so")) {
             val dst = File(root, to)
             // gralloc движка — только если в прошивке своего нет
             if (from == "gralloc.default.so" && dst.isFile) continue

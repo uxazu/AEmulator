@@ -15,6 +15,7 @@
 extern int open(const char *path, int flags, ...);
 extern long write(int fd, const void *buf, unsigned long n);
 extern int close(int fd);
+extern long read(int fd, void *buf, unsigned long n);
 extern void *calloc(unsigned long n, unsigned long size);
 extern void free(void *p);
 extern int *__errno(void);
@@ -227,10 +228,92 @@ static int d_set_mic_mute(struct audio_hw_device *d, int s) { (void)d; (void)s; 
 static int d_get_mic_mute(const struct audio_hw_device *d, unsigned char *s) { (void)d; if (s) *s = 0; return 0; }
 static int d_set_params(struct audio_hw_device *d, const char *kv) { (void)d; (void)kv; return 0; }
 static char *d_get_params(const struct audio_hw_device *d, const char *k) { (void)d; (void)k; return (char *)calloc(1, 1); }
+/* ---------------------------------------------------------------- микрофон
+ * The host records the phone's microphone at exactly the rate and channel count the guest asked for: the stream
+ * announces them on /dev/aemu_mic_ctl ("start <rate> <channels>", "stop") and reads PCM 16-bit from the FIFO
+ * /dev/aemu_mic. Without a host (or without the permission) the guest gets silence at real-time pace.
+ */
+#define CH_IN_MONO 0x10
+#define CH_IN_STEREO 0x0c
+struct audio_stream_in {
+    struct audio_stream common;
+    int (*set_gain)(struct audio_stream_in *s, float gain);
+    long (*read)(struct audio_stream_in *s, void *buf, size_t bytes);
+    uint32_t (*get_input_frames_lost)(struct audio_stream_in *s);
+    fnp get_capture_position, reserved[6];   /* 5.0+: NULL = not supported */
+};
+struct in {
+    struct audio_stream_in s;
+    int fd;
+    uint32_t rate, mask, device;
+    int channels, started;
+};
+/* no libgcc: division by a variable done by shifts */
+static unsigned long udiv(unsigned long n, unsigned long d) {
+    unsigned long q = 0, r = 0;
+    for (int b = 31; b >= 0; b--) { r = (r << 1) | ((n >> b) & 1); if (r >= d) { r -= d; q |= 1UL << b; } }
+    return q;
+}
+static int rate_ok(uint32_t r) { return r == 8000 || r == 11025 || r == 16000 || r == 22050 || r == 32000 || r == 44100 || r == 48000; }
+static size_t in_bytes(uint32_t rate, int ch) { size_t b = (size_t)rate / 50 * (size_t)(ch == 2 ? 4 : 2); return (b + 63) & ~(size_t)63; }  /* 20 ms */
+
+static void mic_ctl(const char *what, uint32_t rate, int ch) {
+    char line[48];
+    int k = 0;
+    for (const char *c = what; *c; c++) line[k++] = *c;
+    if (rate) {
+        char t[12]; int n = 0; uint32_t v = rate;
+        line[k++] = ' ';
+        do { t[n++] = (char)('0' + v % 10); v /= 10; } while (v);
+        while (n) line[k++] = t[--n];
+        line[k++] = ' '; line[k++] = (char)('0' + ch);
+    }
+    line[k++] = 10;   /* '\n' */
+    int fd = open("/dev/aemu_mic_ctl", O_RDWR | O_NONBLOCK);
+    if (fd >= 0) { write(fd, line, (unsigned long)k); close(fd); }
+}
+
+static uint32_t i_rate(const struct audio_stream *s) { return ((const struct in *)s)->rate; }
+static int i_set_rate(struct audio_stream *s, uint32_t r) { (void)s; (void)r; return -ENOSYS; }
+static size_t i_bufsize(const struct audio_stream *s) { const struct in *i = (const struct in *)s; return in_bytes(i->rate, i->channels); }
+static uint32_t i_channels(const struct audio_stream *s) { return ((const struct in *)s)->mask; }
+static uint32_t i_device(const struct audio_stream *s) { return ((const struct in *)s)->device; }
+static int i_set_device(struct audio_stream *s, uint32_t d) { ((struct in *)s)->device = d; return 0; }
+static int i_gain(struct audio_stream_in *s, float g) { (void)s; (void)g; return 0; }
+static uint32_t i_lost(struct audio_stream_in *s) { (void)s; return 0; }
+static int i_standby(struct audio_stream *st) {
+    struct in *i = (struct in *)st;
+    if (i->started) { mic_ctl("stop", 0, 0); i->started = 0; }
+    return 0;
+}
+static long i_read(struct audio_stream_in *st, void *buf, size_t bytes) {
+    struct in *i = (struct in *)st;
+    if (!i->started) { mic_ctl("start", i->rate, i->channels); i->started = 1; }
+    if (i->fd < 0) i->fd = open("/dev/aemu_mic", O_RDWR | O_NONBLOCK);
+    unsigned long frames = (unsigned long)bytes / (i->channels == 2 ? 4UL : 2UL);
+    unsigned long dur_us = udiv(frames * 1000UL, i->rate) * 1000UL;
+    char *p = (char *)buf;
+    size_t got = 0;
+    unsigned long waited = 0;
+    while (got < bytes && i->fd >= 0) {
+        long n = read(i->fd, p + got, bytes - got);
+        if (n > 0) { got += (size_t)n; continue; }
+        if (n < 0 && *__errno() == EINTR) continue;
+        if (waited >= dur_us + dur_us / 2) break;   /* host late or absent: the rest is silence */
+        usleep(2000); waited += 2000;
+    }
+    for (size_t k = got; k < bytes; k++) p[k] = 0;
+    if (i->fd < 0) usleep(dur_us);
+    return (long)bytes;
+}
+
 #ifdef AEMU_ICS
-static size_t d_in_bufsize(const struct audio_hw_device *d, uint32_t r, int f, int ch) { (void)d; (void)r; (void)f; (void)ch; return 0; }
+static size_t d_in_bufsize(const struct audio_hw_device *d, uint32_t r, int f, int ch) { (void)d; (void)f; return in_bytes(rate_ok(r) ? r : 48000, ch == 1 || ch == 2 ? ch : 1); }
 #else
-static size_t d_in_bufsize(const struct audio_hw_device *d, const struct audio_config *c) { (void)d; (void)c; return 0; }
+static size_t d_in_bufsize(const struct audio_hw_device *d, const struct audio_config *c) {
+    (void)d;
+    return in_bytes(rate_ok(c->sample_rate) ? c->sample_rate : 48000, c->channel_mask == CH_IN_STEREO ? 2 : 1);
+}
 #endif
 #ifdef AEMU_QCOM
 static int d_open_session(struct audio_hw_device *d, uint32_t dev, int *f, int ses, struct audio_stream_out **out) {
@@ -301,9 +384,45 @@ static int d_open_in(struct audio_hw_device *d, int h, uint32_t dev, struct audi
     (void)d; (void)h; (void)dev; (void)c;
 #endif
     if (in) *in = 0;
-    return -ENOSYS;   /* микрофона у эмулятора нет */
+#ifdef AEMU_ICS
+    uint32_t want_rate = r ? *r : 0, want_mask = ch ? *ch : 0;
+    int want_fmt = f ? *f : FORMAT_PCM16;
+#else
+    uint32_t want_rate = c ? c->sample_rate : 0, want_mask = c ? c->channel_mask : 0;
+    int want_fmt = c ? c->format : FORMAT_PCM16;
+#endif
+    uint32_t rate = rate_ok(want_rate) ? want_rate : 48000;
+    uint32_t mask = want_mask == CH_IN_STEREO ? CH_IN_STEREO : CH_IN_MONO;
+    if (rate != want_rate || mask != want_mask || want_fmt != FORMAT_PCM16) {
+        /* suggest what we can do; AudioFlinger opens again with it and resamples */
+#ifdef AEMU_ICS
+        if (r) *r = rate; if (ch) *ch = mask; if (f) *f = FORMAT_PCM16;
+#else
+        if (c) { c->sample_rate = rate; c->channel_mask = mask; c->format = FORMAT_PCM16; }
+#endif
+        return -EINVAL;
+    }
+    struct in *i = calloc(1, sizeof(*i));
+    if (!i) return -12;
+    i->fd = -1; i->rate = rate; i->mask = mask; i->channels = mask == CH_IN_STEREO ? 2 : 1; i->device = dev;
+    struct audio_stream *a = &i->s.common;
+    a->get_sample_rate = i_rate; a->set_sample_rate = i_set_rate; a->get_buffer_size = i_bufsize;
+    a->get_channels = i_channels; a->get_format = o_format; a->set_format = o_set_format;
+    a->standby = i_standby; a->dump = o_dump; a->get_device = i_device; a->set_device = i_set_device;
+    a->set_parameters = o_set_params; a->get_parameters = o_get_params;
+    a->add_audio_effect = o_effect; a->remove_audio_effect = o_effect;
+    i->s.set_gain = i_gain; i->s.read = i_read; i->s.get_input_frames_lost = i_lost;
+    *in = i;
+    return 0;
 }
-static void d_close_in(struct audio_hw_device *d, void *in) { (void)d; (void)in; }
+static void d_close_in(struct audio_hw_device *d, void *p) {
+    (void)d;
+    struct in *i = (struct in *)p;
+    if (!i) return;
+    i_standby(&i->s.common);
+    if (i->fd >= 0) close(i->fd);
+    free(i);
+}
 
 #ifdef AEMU_MTK
 /* MediaTek extends audio_hw_device with vendor calls (SetAudioCommand, VoiceUnlock...) after the AOSP slots;

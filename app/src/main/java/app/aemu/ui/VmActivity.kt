@@ -6,6 +6,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.draw.alpha
 import androidx.compose.material.icons.rounded.BatteryStd
 import androidx.compose.material.icons.rounded.InstallMobile
 import androidx.compose.material.icons.rounded.Tune
@@ -133,6 +134,9 @@ class VmActivity : ComponentActivity() {
     private lateinit var guest: GuestScreen
     private lateinit var box: FrameLayout
     private var state by mutableStateOf(GuestVm.State.STOPPED)
+    /** the guest's notification LED and where the guest screen starts (the LED sits just above it) */
+    private var led by mutableStateOf<app.aemu.core.Lights.Led?>(null)
+    private var guestTopPx by mutableStateOf(0)
     private val logLines = mutableStateListOf<String>()
 
     @SuppressLint("ClickableViewAccessibility")
@@ -205,6 +209,7 @@ class VmActivity : ComponentActivity() {
             val h = (gh * scale).toInt()
             val lp = box.layoutParams as FrameLayout.LayoutParams
             val top = safeTop + (ah - h) / 2
+            if (guestTopPx != top) guestTopPx = top
             if (lp.width != w || lp.height != h || lp.topMargin != top) {
                 lp.width = w; lp.height = h
                 lp.gravity = Gravity.CENTER_HORIZONTAL or Gravity.TOP
@@ -217,6 +222,9 @@ class VmActivity : ComponentActivity() {
         state = vm.state
         logLines.addAll(vm.lines().takeLast(200))
         vm.onState { st -> runOnUiThread { state = st } }
+        vm.mic.onPermissionNeeded = { runOnUiThread { askMic.launch(android.Manifest.permission.RECORD_AUDIO) } }
+        led = vm.lights.current
+        vm.lights.onChange { l -> runOnUiThread { led = l } }
         vm.onLog { line -> runOnUiThread { logLines.add(line); if (logLines.size > 400) logLines.removeRange(0, logLines.size - 400) } }
         guest.start()
         loadMenuOffset()
@@ -287,6 +295,16 @@ class VmActivity : ComponentActivity() {
         else -> null
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::vm.isInitialized) vm.sensors.resume(true)
+    }
+
+    override fun onPause() {
+        if (::vm.isInitialized) vm.sensors.resume(false)
+        super.onPause()
+    }
+
     override fun onDestroy() {
         if (::guest.isInitialized) guest.stop()
         shellRx?.let { runCatching { unregisterReceiver(it) } }
@@ -311,6 +329,8 @@ class VmActivity : ComponentActivity() {
     private var menuOffset by mutableStateOf(Offset.Zero)
     private fun loadMenuOffset() { menuOffset = Offset(uiPrefs.getFloat("menu_x", 0f), uiPrefs.getFloat("menu_y", 0f)) }
     private fun saveMenuOffset() { uiPrefs.edit().putFloat("menu_x", menuOffset.x).putFloat("menu_y", menuOffset.y).apply() }
+
+    private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) vm.mic.permissionGranted() }
 
     private fun toast(msg: String) = runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
 
@@ -514,6 +534,7 @@ class VmActivity : ComponentActivity() {
         // как только гость начал рисовать — карточку убираем, остаётся маленький индикатор
         val drawing = frames > 30
         Box(Modifier.fillMaxSize()) {
+            led?.let { LedIndicator(it, Modifier.align(Alignment.TopCenter)) }
             // карточка загрузки
             AnimatedVisibility(
                 visible = state != GuestVm.State.RUNNING && !showLog && !(drawing && state == GuestVm.State.BOOTING),
@@ -619,6 +640,27 @@ class VmActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * The guest's LED above its screen: Sony's illumination bar as a glowing strip, other phones' notification LED as
+     * a dot. Blinks with the guest's on/off times.
+     */
+    @Composable
+    private fun LedIndicator(l: app.aemu.core.Lights.Led, modifier: Modifier) {
+        var on by remember(l) { mutableStateOf(true) }
+        LaunchedEffect(l) {
+            if (l.onMs > 0 && l.offMs > 0) while (true) { on = true; delay(l.onMs.toLong()); on = false; delay(l.offMs.toLong()) }
+        }
+        val alpha by androidx.compose.animation.core.animateFloatAsState(if (on) 1f else 0.08f,
+            androidx.compose.animation.core.tween(if (on) 120 else 260), label = "led")
+        val c = Color(0xff000000.toInt() or (l.color and 0xffffff))
+        val sony = vm.img.skin.contains("Xperia", true) || vm.img.brand.contains("Sony", true)
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val y = with(density) { (guestTopPx.toDp() - 10.dp).coerceAtLeast(4.dp) }
+        Box(modifier.offset(y = y).size(if (sony) 96.dp else 14.dp, if (sony) 5.dp else 14.dp)
+            .alpha(alpha)
+            .background(androidx.compose.ui.graphics.Brush.radialGradient(listOf(c, c.copy(alpha = 0.55f), Color.Transparent)), CircleShape))
     }
 
     @Composable
