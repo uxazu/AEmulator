@@ -582,6 +582,7 @@ static long trap2(long nr, long *a, void *uc, char **pbp) {
             S5(nr, a[0], 1, a[2] == 33 ? 8 : 7, a[3], a[4]);
             return 0;
         }
+        if (r < 0 && a[1] == 1 && a[2] == 36) return 0;             // SO_MARK (netd tags every app socket): CAP_NET_ADMIN too
         return r;
     }
     case NR_rt_sigaction: {
