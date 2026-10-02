@@ -221,8 +221,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         overrides["ro.kernel.qemu"] = if (engine == Engine.GB) "0" else "1"
         overrides["ro.kernel.qemu.gles"] = if (s.gpu && (s.hwui || engine == Engine.GB)) "1" else "0"
         overrides["qemu.gles"] = if (s.gpu) "1" else "0"
-        if (engine == Engine.N64) {             // software rendering until the engine's own GL stack is in
-            overrides["ro.kernel.qemu.gles"] = "0"; overrides["qemu.gles"] = "0"
+        if (engine == Engine.N64) {             // SwiftShader (GLES 2/3 on the CPU) where the engine has it for this release
+            val ss = if (File(paths.root, "system/lib64/egl/libEGL_swiftshader.so").isFile) "1" else "0"
+            overrides["ro.kernel.qemu.gles"] = ss; overrides["qemu.gles"] = ss
         }
         // 7.0+ libEGL ignores egl.cfg and takes the first libGLES_*.so it finds; without the bridge: the software one
         if (img.api >= 24 && !s.gpu) {

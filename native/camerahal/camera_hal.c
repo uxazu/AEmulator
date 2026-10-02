@@ -149,7 +149,18 @@ static const char DEFAULTS[] =
     "video-frame-format=yuv420sp;video-size=640x480;video-size-values=640x480;preferred-preview-size-for-video=640x480;"
     "max-num-detected-faces-hw=0;max-num-detected-faces-sw=0;max-num-focus-areas=0;max-num-metering-areas=0;"
     "video-snapshot-supported=false;video-stabilization-supported=false;auto-exposure-lock-supported=false;"
-    "auto-whitebalance-lock-supported=false";
+    "auto-whitebalance-lock-supported=false;"
+    // what Qualcomm camera apps (MIUI's) read as numbers without asking whether the key is there
+    "saturation=5;max-saturation=10;min-saturation=0;saturation-step=1;contrast=5;max-contrast=10;min-contrast=0;contrast-step=1;"
+    "sharpness=2;max-sharpness=6;min-sharpness=0;sharpness-step=1;brightness=3;max-brightness=6;min-brightness=0;brightness-step=1;"
+    "luma-adaptation=3;iso=auto;iso-values=auto;auto-exposure=center-weighted;auto-exposure-values=center-weighted;"
+    "zsl=off;zsl-values=off;face-detection=off;face-detection-values=off;denoise=denoise-off;denoise-values=denoise-off;"
+    "redeye-reduction=disable;redeye-reduction-values=disable;lensshade=enable;lensshade-values=enable;"
+    "touch-af-aec=touch-off;touch-af-aec-values=touch-off;selectable-zone-af=auto;selectable-zone-af-values=auto;"
+    "num-snaps-per-shutter=1;snapshot-burst-num=1;long-shot=off;camera-mode=0;ae-bracket-hdr=Off;ae-bracket-hdr-values=Off;"
+    "video-hfr=off;video-hfr-values=off;video-hdr=off;video-hdr-values=off;"
+    "max-wb-cct=7000;min-wb-cct=2000;max-focus-pos-index=0;min-focus-pos-index=0;max-exposure-time=0;min-exposure-time=0;"
+    "max-iso=0;min-iso=0;qc-max-num-requested-faces=0;preview-flip=off;video-flip=off;snapshot-picture-flip=off";
 
 static unsigned long slen(const char *s) { unsigned long n = 0; while (s[n]) n++; return n; }
 static void copy(void *d, const void *s, unsigned long n) {

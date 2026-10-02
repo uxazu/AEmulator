@@ -367,6 +367,25 @@ class TreeFixer(
                 if (f.renameTo(dst)) parked++
             }
         }
+        // GLES 1/2/3 comes from SwiftShader (engines/n64-<api>): libEGL scans egl/ for lib<API>_*.so, so the GPU
+        // vendor's drivers step aside. The 32-bit side keeps the stock software renderer under the exact name libGLES.so.
+        if (File(root, "system/lib64/egl/libEGL_swiftshader.so").isFile) {
+            for (dir in listOf("system/lib64/egl", "system/vendor/lib64/egl", "system/vendor/lib/egl")) {
+                File(root, dir).listFiles()?.forEach { f ->
+                    if (!f.isFile || f.name.endsWith("_swiftshader.so") || f.name == "libGLES_android.so") return@forEach
+                    val dst = File(root, "system/.aemu-parked/${f.relativeTo(root).path.replace('/', '#')}")
+                    dst.parentFile?.mkdirs()
+                    if (dst.exists()) dst.delete()
+                    if (f.renameTo(dst)) parked++
+                }
+            }
+            val egl32 = File(root, "system/lib/egl")
+            if (File(egl32, "libGLES_android.so").isFile) {
+                for (n in listOf("libGLES_aemu.so", "libGLES_bridge.so", "libEGL_aemu.so", "libGLESv1_CM_aemu.so", "libGLESv2_aemu.so", "libGLES.so"))
+                    File(egl32, n).let { if (isLink(it)) Os.remove(it.absolutePath) else it.delete() }
+                runCatching { Os.symlink("libGLES_android.so", File(egl32, "libGLES.so").path) }
+            }
+        }
         if (parked > 0) log("vendor HALs set aside: $parked")
     }
 
