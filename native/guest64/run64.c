@@ -80,6 +80,7 @@ static int g_uid, g_gid;        // the ids the guest believes it has
 static u32 g_real_uid;
 static char g_qemu[512];        // qemu-arm for the firmware's 32-bit programs (AEMU64_QEMU)
 static int g_crash;
+static char g_sd[512]; static u64 g_sdlen;   // the shared card folder on the phone (AEMU64_SDCARD)
 static int g_is32;                // this process is qemu-arm running a 32-bit program
 static void (*g_fatal[32])(int, void *, void *);
 static void fatal_relay(int sig, void *info, void *uc);
@@ -145,6 +146,20 @@ static const char *xl(const char *p, char *buf, int *err) {
     if (pre(n, "/dev/") && host_dev(n + 5)) return p;
     if (g_props[0] && seq(n, "/dev/__properties__")) return g_props;
     if (pre(n, g_root) && (n[g_rootlen] == '/' || !n[g_rootlen])) return p;   // already a host path (our own argv)
+    if (g_sdlen) {
+        // the guest's card: plain directories for it, the shared folder of the phone underneath
+        static const char *const sd[] = { "/storage/emulated/0", "/storage/emulated/legacy", "/storage/self/primary", "/sdcard",
+                                          "/mnt/sdcard", "/mnt/user/0/primary", "/mnt/shell/emulated/0", "/storage/sdcard0", 0 };
+        for (int i = 0; sd[i]; i++) {
+            u64 l = slen(sd[i]);
+            if (!pre(n, sd[i]) || (n[l] != '/' && n[l])) continue;
+            u64 rest = slen(n + l);
+            if (g_sdlen + rest + 1 > 3 * PATH_MAX - PATH_MAX) break;
+            memmove(buf + g_sdlen, n + l, rest + 1);
+            memcpy(buf, g_sd, g_sdlen);
+            return buf;
+        }
+    }
     memcpy(buf, g_root, g_rootlen);
     if (!n[1]) n[0] = 0;
     return buf;
@@ -152,6 +167,13 @@ static const char *xl(const char *p, char *buf, int *err) {
 
 // host path → guest path, in place
 static void unxl(char *p) {
+    if (g_sdlen && pre(p, g_sd) && (p[g_sdlen] == '/' || !p[g_sdlen])) {
+        static const char g[] = "/storage/emulated/0";
+        u64 rest = slen(p + g_sdlen);
+        memmove(p + sizeof g - 1, p + g_sdlen, rest + 1);
+        memcpy(p, g, sizeof g - 1);
+        return;
+    }
     if (!pre(p, g_root)) return;
     if (!p[g_rootlen]) { p[0] = '/'; p[1] = 0; return; }
     if (p[g_rootlen] == '/') memmove(p, p + g_rootlen, slen(p + g_rootlen) + 1);
@@ -330,6 +352,8 @@ static long do_exec(const char *path, char *const argv[], char *const envp[]) {
     if (g_input[0]) { memcpy(e_input, "AEMU64_INPUT=", 13); memcpy(e_input + 13, g_input, slen(g_input) + 1); *a++ = e_input; }
     static char e_qemu[540];
     if (g_qemu[0]) { memcpy(e_qemu, "AEMU64_QEMU=", 12); memcpy(e_qemu + 12, g_qemu, slen(g_qemu) + 1); *a++ = e_qemu; }
+    static char e_sd[540];
+    if (g_sdlen) { memcpy(e_sd, "AEMU64_SDCARD=", 14); memcpy(e_sd + 14, g_sd, g_sdlen + 1); *a++ = e_sd; }
     *a++ = 0;
     r = S3(NR_execve, g_self, v, e);
     S2(NR_munmap, v, need);
@@ -766,6 +790,7 @@ void aemu_main(u64 *sp) {
     if ((r = env_get(envp, "AEMU64_PROPS")) && slen(r) < sizeof g_props) memcpy(g_props, r, slen(r) + 1);
     g_crash = env_get(envp, "AEMU64_CRASH") != 0;
     if ((r = env_get(envp, "AEMU64_INPUT")) && slen(r) < sizeof g_input) memcpy(g_input, r, slen(r) + 1);
+    if ((r = env_get(envp, "AEMU64_SDCARD")) && slen(r) < sizeof g_sd) { g_sdlen = slen(r); memcpy(g_sd, r, g_sdlen + 1); }
     if ((r = env_get(envp, "AEMU64_QEMU")) && slen(r) < sizeof g_qemu) memcpy(g_qemu, r, slen(r) + 1);
     if ((r = env_get(envp, "AEMU64_BINDER")) && slen(r) < sizeof g_bsock) memcpy(g_bsock, r, slen(r) + 1);
     if ((r = env_get(envp, "AEMU64_ID"))) { g_uid = (int)atou(r); while (*r && *r != ',') r++; if (*r) g_gid = (int)atou(r + 1); }

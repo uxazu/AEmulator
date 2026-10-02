@@ -254,6 +254,9 @@ class TreeFixer(
             append("key 212 CAMERA\n")
             // APP_SWITCH exists from 3.0; older layouts reject unknown labels and drop the whole file
             if (img.api >= 11) append("key ${InputService.KEY_APPSELECT} APP_SWITCH\n")
+        }.let {
+            // 5.0 dropped the WAKE flags from the layout syntax: an unknown flag makes the guest reject the whole file
+            if (img.api >= 21) it.replace(" WAKE_DROPPED", "").replace(" WAKE", "") else it
         }
         if (runCatching { f.readText() }.getOrNull() == text) return
         runCatching { f.parentFile?.mkdirs(); f.writeText(text); f.setReadable(true, false) }

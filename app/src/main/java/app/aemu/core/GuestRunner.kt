@@ -75,6 +75,7 @@ class GuestRunner(
         e["AEMU64_BINDER"] = paths.binderSock.absolutePath
         e["AEMU64_INPUT"] = paths.inputSock.absolutePath
         paths.nativeBin("libqemu_arm.so").takeIf { it.canExecute() }?.let { e["AEMU64_QEMU"] = it.absolutePath }
+        sdcardHost?.let { e["AEMU64_SDCARD"] = it.absolutePath }
         e["AEMU64_FB"] = "${img.settings.width}x${img.settings.height}"
         // debugging: run/crash.report makes the runner print pc/lr and their mappings on a fatal signal
         if (File(paths.bin, "crash.report").exists()) e["AEMU64_CRASH"] = "1"

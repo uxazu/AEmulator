@@ -30,7 +30,8 @@ object Sdcard {
             )
         }
         val all = (GUEST_PATHS + img.sdcardPath.trimStart('/')).distinct()
-        for (rel in all) placeholder(File(paths.root, rel))
+        // (the native arm64 engine maps the card inside its runner too: AEMU64_SDCARD)
+        for (rel in all + listOf("storage/self/primary", "mnt/user/0/primary")) placeholder(File(paths.root, rel))
         for (rel in listOf("mnt/asec", "mnt/obb", "mnt/secure/asec")) File(paths.root, rel).mkdirs()
         runCatching { File(paths.bin, "sdcard.path").writeText(d.absolutePath + "\n") }
         log("sdcard: ${d.absolutePath} → guest sees ${img.sdcardPath}")
@@ -69,6 +70,17 @@ object Sdcard {
     }.getOrDefault(false)
 
     /** В дереве гостя на месте точки монтирования должен быть обычный каталог (не ссылка). */
+    private fun link(f: File, target: File) {
+        val p = f.toPath()
+        if (Files.isSymbolicLink(p)) {
+            if (runCatching { Os.readlink(f.absolutePath) }.getOrNull() == target.absolutePath) return
+            runCatching { Os.remove(f.absolutePath) }
+        } else if (f.isDirectory && f.list().isNullOrEmpty()) f.delete()      // our own empty placeholder
+        else if (f.exists()) return                                           // the firmware's own content stays
+        f.parentFile?.mkdirs()
+        runCatching { Os.symlink(target.absolutePath, f.absolutePath) }
+    }
+
     private fun placeholder(f: File) {
         if (runCatching { Files.isSymbolicLink(f.toPath()) }.getOrDefault(false)) runCatching { Os.remove(f.absolutePath) }
         else if (f.isFile) f.delete()

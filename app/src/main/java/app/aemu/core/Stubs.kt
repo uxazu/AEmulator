@@ -372,6 +372,7 @@ class VoldStub(
     sockName: String = "vold",
     /** остальные тома прошивки (съёмные карты, USB): сообщаем о них как о «нет носителя» */
     private val others: List<String> = emptyList(),
+    private val api: Int = 19,
 ) {
     @Volatile var state = MOUNTED
     private val label = mountPoint.substringAfterLast('/').ifEmpty { "sdcard" }
@@ -413,6 +414,22 @@ class VoldStub(
         val sub = args.getOrElse(1) { "" }
         var after: (() -> Unit)? = null
         val reply: List<String> = when {
+            // 6.0 vold: volumes are announced as events. One emulated volume over the shared folder; MountService
+            // asks to mount it and gets its paths (/storage/emulated/<user>, kept in /data/media).
+            api >= 23 && head == "volume" && sub == "reset" -> {
+                after = { event("650 emulated 2 \"\" \"\"", "651 emulated 0") }
+                listOf("200 Command succeeded")
+            }
+            api >= 23 && head == "volume" && sub == "mount" -> {
+                val id = args.getOrElse(2) { "emulated" }
+                after = { event("651 $id 1", "656 $id /data/media", "655 $id /storage/emulated", "651 $id 2") }
+                listOf("200 Command succeeded")
+            }
+            api >= 23 && head == "volume" && sub == "unmount" -> {
+                val id = args.getOrElse(2) { "emulated" }
+                after = { event("651 $id 5", "651 $id 0") }
+                listOf("200 Command succeeded")
+            }
             // с томами из storage_list (4.x) сообщаем только о них: основное хранилище там эмулируемое,
             // а незнакомый путь MountService Samsung считает ошибкой и обрывает список
             head == "volume" && sub == "list" -> (if (others.isEmpty()) listOf("110 $label $mountPoint $state")
@@ -443,7 +460,13 @@ class VoldStub(
         return "$code $seq${line.substring(sp)}"
     }
 
+    private fun event(vararg msgs: String) {
+        val list = synchronized(clients) { ArrayList(clients) }
+        for (c in list) runCatching { send(c.outputStream, msgs.toList()) }
+    }
+
     fun announce(from: Int, to: Int) {
+        if (api >= 23) return
         val msg = "605 Volume $label $mountPoint state changed from $from (${name(from)}) to $to (${name(to)})"
         val list = synchronized(clients) { ArrayList(clients) }
         for (c in list) runCatching { send(c.outputStream, listOf(msg)) }
