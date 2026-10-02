@@ -118,9 +118,10 @@ static const char *xl(const char *p, char *buf, int *err) {
     char *n = buf + g_rootlen;              // normalised straight into its place after the root
     if ((*err = norm(p, n, PATH_MAX - g_rootlen))) return 0;
     if ((pre(n, "/proc") && (n[5] == '/' || !n[5])) || (pre(n, "/sys") && (n[4] == '/' || !n[4]))) {
-        // the image's own files win (fake sysfs, /proc/mounts); the rest is the phone's. No SELinux for the guest.
+        // the image's own files win (fake sysfs, /proc/mounts); the rest is the phone's. No SELinux for the guest,
+        // and none of the phone's suspend controls (reading its wakeup_count blocks the guest's power manager).
         memcpy(buf, g_root, g_rootlen);
-        if (pre(n, "/sys/fs/selinux") || S4(NR_faccessat, AT_FDCWD, buf, 0, 0) == 0) return buf;
+        if (pre(n, "/sys/fs/selinux") || pre(n, "/sys/power") || S4(NR_faccessat, AT_FDCWD, buf, 0, 0) == 0) return buf;
         return p;
     }
     if (pre(n, "/dev/") && host_dev(n + 5)) return p;
@@ -201,7 +202,7 @@ static long fb_ioctl(u32 cmd, u64 arg) {
     case 0x4600: {                              // FBIOGET_VSCREENINFO
         u32 *v = (u32 *)arg;
         memset(v, 0, 160);
-        v[0] = g_fbw; v[1] = g_fbh; v[2] = g_fbw; v[3] = g_fbh * 2; v[6] = 32;
+        v[0] = g_fbw; v[1] = g_fbh; v[2] = g_fbw; v[3] = g_fbh; v[6] = 32;   // one page: gralloc copies each frame in on post
         v[8] = 0; v[9] = 8; v[11] = 8; v[12] = 8; v[14] = 16; v[15] = 8; v[17] = 24; v[18] = 8;   // R, G, B, A
         return 0;
     }
@@ -209,7 +210,7 @@ static long fb_ioctl(u32 cmd, u64 arg) {
         u8 *f = (u8 *)arg;
         memset(f, 0, 80);
         memcpy(f, "aemu", 5);
-        *(u32 *)(f + 24) = g_fbw * g_fbh * 4 * 2;   // smem_len
+        *(u32 *)(f + 24) = g_fbw * g_fbh * 4;       // smem_len
         *(u32 *)(f + 36) = 2;                       // FB_VISUAL_TRUECOLOR
         *(u16 *)(f + 42) = 1;                       // ypanstep
         *(u32 *)(f + 48) = g_fbw * 4;               // line_length
@@ -565,6 +566,8 @@ static void where(u64 addr) {
 static void on_crash(int sig, void *info, void *uc) {
     struct { u64 fault; u64 regs[31]; u64 sp, pc, pstate; } *c = (void *)((char *)uc + 176);
     char t[24];
+    static volatile int busy;                   // one report at a time; the others wait their turn
+    while (__atomic_exchange_n(&busy, 1, __ATOMIC_ACQUIRE)) S0(NR_sched_yield);
     {
         static char lp[600];
         memcpy(lp, g_root, g_rootlen); memcpy(lp + g_rootlen, "/dev/aemu_crash.log", 20);
@@ -575,6 +578,16 @@ static void on_crash(int sig, void *info, void *uc) {
     say("\n  pc "); hex(c->pc); say("  lr "); hex(c->regs[30]); say("  addr "); hex(*(u64 *)((char *)info + 16)); say("\n");
     where(c->pc); where(c->regs[30]);
     for (int i = 0; i < 8; i++) { say("  x"); say(utoa((u64)i, t + sizeof t)); say(" "); hex(c->regs[i]); if (i % 4 == 3) say("\n"); }
+    say("  pid "); say(utoa((u64)S0(172), t + sizeof t)); say("  registers and what they point to:\n");
+    for (int i = 0; i < 29; i++) {
+        u64 w[4] = { 0, 0, 0, 0 };
+        struct { void *b; u64 n; } l = { w, sizeof w }, r = { (void *)c->regs[i], sizeof w };
+        say("  x"); say(utoa((u64)i, t + sizeof t)); say(" "); hex(c->regs[i]);
+        if (c->regs[i] > 0x10000 && S6(270 /*process_vm_readv*/, S0(172), &l, 1, &r, 1, 0) == (long)sizeof w) {
+            say(" ->"); for (int k = 0; k < 4; k++) { say(" "); hex(w[k]); }
+        }
+        say("\n");
+    }
     say("  backtrace:\n");
     u64 fp = c->regs[29];
     for (int i = 0; i < 24 && fp > 0x10000 && !(fp & 7); i++) {

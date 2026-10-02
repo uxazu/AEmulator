@@ -75,7 +75,8 @@ struct wq { struct work *head, *tail; };
 
 struct ref { struct proc *proc; u32 desc; struct node *node; int strong, weak, has_death; u64 death; struct ref *next_in_node; };
 struct node {
-    struct proc *owner; u64 ptr, cookie; int internal_strong, local_strong, nrefs, has_strong, has_weak, queued, has_async;
+    struct proc *owner; u64 ptr, cookie; int internal_strong, local_strong, local_weak, nrefs, has_strong, has_weak, queued, has_async;
+    int pend_strong, pend_weak;     /* BR_ACQUIRE / BR_INCREFS sent, not yet confirmed: the node keeps a reference of its own until then */
     struct ref *refs; struct wq async; struct node *hnext;
 };
 struct held { struct ref *ref; struct node *node; int strong; };      /* what a transaction buffer keeps alive */
@@ -121,7 +122,7 @@ static void kick_proc(struct proc *p);
 
 static void node_work(struct node *n) {
     if (!n->owner || n->queued) return;
-    int strong = n->internal_strong || n->local_strong, weak = n->nrefs || strong;
+    int strong = n->internal_strong || n->local_strong, weak = n->nrefs || n->local_weak || strong;
     if ((weak && !n->has_weak) || (strong && !n->has_strong) || (!strong && n->has_strong) || (!weak && n->has_weak)) {
         struct work *w = mkwork(W_NODE); w->node = n; n->queued = 1;
         if (cur && cur->proc == n->owner) wq_push(&cur->todo, w);
@@ -130,7 +131,7 @@ static void node_work(struct node *n) {
 }
 
 static void node_free_if_unused(struct node *n) {
-    if (n->nrefs || n->internal_strong || n->local_strong || n->queued || n->has_strong || n->has_weak) {
+    if (n->nrefs || n->internal_strong || n->local_strong || n->local_weak || n->queued || n->has_strong || n->has_weak) {
         if (n->owner) return;
         if (n->nrefs || n->local_strong || n->queued) return;     /* a dead node lives as long as someone refers to it */
     }
@@ -146,10 +147,14 @@ static void node_free_if_unused(struct node *n) {
 
 static struct node *node_get(struct proc *p, u64 ptr, u64 cookie, int create) {
     struct node **b = &p->nodes[(ptr >> 4) % NHASH];
-    for (struct node *n = *b; n; n = n->hnext) if (n->ptr == ptr) return n;
+    for (struct node *n = *b; n; n = n->hnext) if (n->ptr == ptr) {
+        if (create && n->cookie != cookie) { V("  node %d ptr %llx: cookie %llx -> %llx", p->pid, (unsigned long long)ptr, (unsigned long long)n->cookie, (unsigned long long)cookie); n->cookie = cookie; }
+        return n;
+    }
     if (!create) return 0;
     struct node *n = zalloc(sizeof *n);
     n->owner = p; n->ptr = ptr; n->cookie = cookie; n->hnext = *b; *b = n;
+    V("  new node %d ptr %llx cookie %llx", p->pid, (unsigned long long)ptr, (unsigned long long)cookie);
     return n;
 }
 
@@ -366,10 +371,11 @@ fail:
 // ------------------------------------------------------------------------------------------- delivery
 
 static int emit_node(struct node *n, u32 *br) {
-    int k = 0, strong = n->internal_strong || n->local_strong, weak = n->nrefs || strong;
-#define PUT(c) do { br[k] = c; memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->cookie, 8); k += 5; } while (0)
-    if (weak && !n->has_weak) { PUT(BR_INCREFS); n->has_weak = 1; }
-    if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; }
+    int k = 0, strong = n->internal_strong || n->local_strong, weak = n->nrefs || n->local_weak || strong;
+#define PUT(c) do { V("  node %d ptr %llx cookie %llx: %x", n->owner ? n->owner->pid : 0, (unsigned long long)n->ptr, (unsigned long long)n->cookie, (unsigned)c); br[k] = c; memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->cookie, 8); k += 5; } while (0)
+    /* the owner must not be told to drop a reference before it has taken it: until BC_*_DONE the node holds one itself */
+    if (weak && !n->has_weak) { PUT(BR_INCREFS); n->has_weak = 1; n->pend_weak = 1; n->local_weak++; }
+    if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; n->local_strong++; }
     if (!strong && n->has_strong) { PUT(BR_RELEASE); n->has_strong = 0; }
     if (!weak && n->has_weak) { PUT(BR_DECREFS); n->has_weak = 0; }
 #undef PUT
@@ -490,11 +496,21 @@ static void do_bcs(struct thread *th, u32 *c, int words) {
         case BC_INCREFS: case BC_ACQUIRE: {
             struct ref *r = ref_get(p, (u32)a);
             if (!r && (u32)a == 0 && ctx_mgr) r = ref_for_node(p, ctx_mgr);
+            /* a strong reference cannot be made out of a weak one once the object has no strong references left
+             * (its owner may have destroyed it); the driver refuses this the same way */
+            if (r && cmd == BC_ACQUIRE && !r->strong && !r->node->internal_strong && r->node != ctx_mgr) { V("pid %d: acquire of a released node refused", p->pid); break; }
             if (r) ref_inc(r, cmd == BC_ACQUIRE);
             break;
         }
         case BC_RELEASE: case BC_DECREFS: { struct ref *r = ref_get(p, (u32)a); if (r) ref_dec(r, cmd == BC_RELEASE); break; }
-        case BC_INCREFS_DONE: case BC_ACQUIRE_DONE: break;
+        case BC_INCREFS_DONE: case BC_ACQUIRE_DONE: {
+            struct node *n = node_get(p, a, b, 0);
+            if (!n) break;
+            if (cmd == BC_ACQUIRE_DONE && n->pend_strong) { n->pend_strong = 0; n->local_strong--; }
+            if (cmd == BC_INCREFS_DONE && n->pend_weak) { n->pend_weak = 0; n->local_weak--; }
+            node_work(n); node_free_if_unused(n);
+            break;
+        }
         case BC_REGISTER_LOOPER: th->looper |= 1; if (p->requested) { p->requested--; p->started++; } break;
         case BC_ENTER_LOOPER: th->looper |= 2; break;
         case BC_EXIT_LOOPER: th->looper |= 4; break;
@@ -568,6 +584,8 @@ static void proc_release(struct proc *p) {
     for (int i = 0; i < NHASH; i++) for (struct node *n = p->nodes[i], *nx; n; n = nx) {
         nx = n->hnext;
         n->owner = 0; n->queued = 0; n->hnext = 0;
+        if (n->pend_strong) { n->pend_strong = 0; n->local_strong--; }
+        if (n->pend_weak) { n->pend_weak = 0; n->local_weak--; }
         for (struct work *w; (w = wq_pop(&n->async));) { txn_free(w->t); free(w); }
         for (struct ref *r = n->refs; r; r = r->next_in_node) if (r->has_death) {
             struct work *w = mkwork(W_DEAD_BINDER); w->cookie = r->death; wq_push(&r->proc->todo, w);

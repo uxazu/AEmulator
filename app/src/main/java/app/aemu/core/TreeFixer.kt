@@ -281,11 +281,12 @@ class TreeFixer(
 
     /** Native arm64 engine: its HALs and libraries are arm64 files from assets/engines/n64, named "a#b#c" for a/b/c. */
     private fun installNative64() {
-        val names = runCatching { ctx.assets.list("engines/n64") }.getOrNull() ?: return
+        // engines/n64-<api>: AOSP's own SurfaceFlinger for that release. The vendors' ones (MIUI's blur, Qualcomm's
+        // ExSurfaceFlinger) need the GPU's GLES 2 and show no windows on the software renderer.
         var copied = 0
-        for (n in names) {
+        for (dir in listOf("engines/n64", "engines/n64-${img.api}")) for (n in runCatching { ctx.assets.list(dir) }.getOrNull().orEmpty()) {
             val dst = File(root, n.replace('#', '/'))
-            val asset = "engines/n64/$n"
+            val asset = "$dir/$n"
             val size = runCatching { ctx.assets.openFd(asset).use { it.length } }.getOrDefault(-1L)
             if (dst.isFile && size >= 0 && dst.length() == size && sameContent(asset, dst)) continue
             runCatching {
