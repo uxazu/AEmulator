@@ -517,6 +517,22 @@ static long trap2(long nr, long *a, void *uc, char **pbp) {
         return S3(nr, a[0], a[1], a[2]);
     case NR_mmap:
         if (a[2] == 1 && is_binder_fd((int)a[4])) return binder_mmap((u64)a[0], (u64)a[1], a[3]);
+        if (g_is32 && a[2] == 1 && g_props[0] && (int)a[4] >= 0) {
+            // 32-bit programs only have the GLES 1 renderer: in their (private) view of the property area the
+            // "GLES 2 is there" flag reads 0, so their windows are drawn without hwui. Only that page is a copy.
+            static struct kstat ps; struct kstat fs;
+            if (!ps.st_ino) S4(NR_newfstatat, AT_FDCWD, g_props, &ps, 0);
+            if (ps.st_ino && S2(NR_fstat, a[4], &fs) == 0 && fs.st_ino == ps.st_ino && fs.st_dev == ps.st_dev) {
+                long r = S6(nr, a[0], a[1], 3, (a[3] & ~1L) | 2, a[4], a[5]);
+                if (r < 0 && r > -4096) return S6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
+                static const char key[] = "ro.kernel.qemu.gles";
+                char *m = (char *)r; u64 len = (u64)a[1];
+                for (u64 i = 96; i + sizeof key <= len; i += 4)
+                    if (m[i] == 'r' && m[i + 1] == 'o' && seq(m + i, key)) { if (m[i - 92] == '1' && !m[i - 91]) m[i - 92] = '0'; break; }
+                S3(NR_mprotect, r, a[1], 1);
+                return r;
+            }
+        }
         return S6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
     case NR_mount: case NR_umount2: case NR_chroot: case NR_capset: case NR_setgroups: case NR_unshare: return 0;
     case NR_prctl: return 0;                    // only PR_CAPBSET_DROP gets here
