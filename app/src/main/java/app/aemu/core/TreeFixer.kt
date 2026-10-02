@@ -314,6 +314,7 @@ class TreeFixer(
         if (copied > 0) log("engine n64 files updated: $copied")
         // qemu-arm (the firmware's 32-bit programs) asks for the lowest mappable address; the phone hides the real file
         runCatching { File(root, "proc/sys/vm").mkdirs(); File(root, "proc/sys/vm/mmap_min_addr").writeText("65536") }
+        runCatching { File(root, "proc/.one/1").mkdirs(); File(root, "proc/.task1").mkdirs(); File(root, "proc/.task1/none").writeText("") }     // what a 32-bit program sees as /proc/self/task
         // the vendor's HALs drive hardware this phone does not have (ION, MDP, the SoC's audio DSP): with them
         // aside, the loader falls back to the *.default ones
         var parked = 0

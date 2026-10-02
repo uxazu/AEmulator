@@ -232,11 +232,18 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         overrides["qemu.sf.lcd_density"] = s.density.toString()
         overrides["ro.aemu.host"] = if (engine == Engine.N64) "native" else "qemu-user"
         if (engine == Engine.N64) {
-            // the phone runs arm64 code only: one 64-bit zygote, no 32-bit side
-            overrides["ro.zygote"] = "zygote64"
-            overrides["ro.product.cpu.abilist"] = "arm64-v8a"
-            overrides["ro.product.cpu.abilist64"] = "arm64-v8a"
-            overrides["ro.product.cpu.abilist32"] = ""
+            // the phone runs arm64 code only: the 32-bit zygote and its apps go through qemu-arm when it is there
+            if (n64Has32) {
+                overrides["ro.zygote"] = "zygote64_32"
+                overrides["ro.product.cpu.abilist"] = "arm64-v8a,armeabi-v7a,armeabi"
+                overrides["ro.product.cpu.abilist64"] = "arm64-v8a"
+                overrides["ro.product.cpu.abilist32"] = "armeabi-v7a,armeabi"
+            } else {
+                overrides["ro.zygote"] = "zygote64"
+                overrides["ro.product.cpu.abilist"] = "arm64-v8a"
+                overrides["ro.product.cpu.abilist64"] = "arm64-v8a"
+                overrides["ro.product.cpu.abilist32"] = ""
+            }
         }
         overrides["dalvik.vm.execution-mode"] = if (s.jit) "int:jit" else "int:fast"
         if (s.lowRam || s.ramMb in 1..768) overrides["ro.config.low_ram"] = "true"
@@ -446,6 +453,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }
     }
 
+    private val n64Has32: Boolean get() = paths.nativeBin("libqemu_arm.so").canExecute() && File(paths.root, "system/bin/app_process32").isFile
+
     val glInApp: Boolean get() = engine == Engine.KK && GlBridge.running()
 
     private fun startService(svc: GuestService, propsFile: File? = null) {
@@ -453,7 +462,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             log("· ${svc.name}: ${svc.argv.first()} missing, skipping")
             return
         }
-        if (engine == Engine.N64 && (svc.name == "zygote_secondary" || svc.argv.first().substringAfterLast('/') in N64_SKIP)) return
+        if (engine == Engine.N64 && ((svc.name == "zygote_secondary" && !n64Has32) || svc.argv.first().substringAfterLast('/') in N64_SKIP)) return
         if (engine == Engine.N64 && !paths.nativeBin("libqemu_arm.so").canExecute() && !runsNatively(File(paths.root, svc.argv.first().removePrefix("/")))) {
             log("· ${svc.name}: 32-bit program, skipped by the native arm64 engine")
             return

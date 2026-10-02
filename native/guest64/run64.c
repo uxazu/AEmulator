@@ -80,8 +80,17 @@ static int g_uid, g_gid;        // the ids the guest believes it has
 static u32 g_real_uid;
 static char g_qemu[512];        // qemu-arm for the firmware's 32-bit programs (AEMU64_QEMU)
 static int g_crash;
+static int g_is32;                // this process is qemu-arm running a 32-bit program
 static void (*g_fatal[32])(int, void *, void *);
 static void fatal_relay(int sig, void *info, void *uc);
+// qemu-arm's signal handler blocks every signal in the context it returns to (until the guest's handler is
+// entered); with SIGSYS blocked the next trapped call would kill the process, so that bit is taken back out.
+static void (*g_h32[65])(int, void *, void *);
+static void relay32(int sig, void *info, void *uc) {
+    void (*h)(int, void *, void *) = g_h32[sig];
+    if ((unsigned long)h > 1) h(sig, info, uc);
+    *(unsigned long *)((char *)uc + 40) &= ~(1UL << 30);    // uc_sigmask, SIGSYS
+}
 static int is_fatal(long sig) { return sig == 11 || sig == 7 || sig == 4 || sig == 6 || sig == 8; }            // AEMU64_CRASH: report fatal signals ourselves
 
 // ---------------------------------------------------------------------------------------------------- paths
@@ -120,10 +129,19 @@ static const char *xl(const char *p, char *buf, int *err) {
     if ((pre(n, "/proc") && (n[5] == '/' || !n[5])) || (pre(n, "/sys") && (n[4] == '/' || !n[4]))) {
         // the image's own files win (fake sysfs, /proc/mounts); the rest is the phone's. No SELinux for the guest,
         // and none of the phone's suspend controls (reading its wakeup_count blocks the guest's power manager).
+        // under qemu-arm the process has the translator's own helper thread; zygote waits before every fork until
+        // /proc/self/task lists one thread, so 32-bit programs see a list of one
+        if (g_is32 && n[5] == '/') {
+            const char *q = n + 6; u64 pid = 0;
+            if (pre(q, "self")) q += 4; else { while (*q >= '0' && *q <= '9') pid = pid * 10 + (u64)(*q++ - '0'); if (pid != (u64)S0(172 /* getpid */)) q = ""; }
+            if (seq(q, "/task")) memcpy(n, "/proc/.one", 11);
+        }
         memcpy(buf, g_root, g_rootlen);
         if (pre(n, "/sys/fs/selinux") || pre(n, "/sys/power") || S4(NR_faccessat, AT_FDCWD, buf, 0, 0) == 0) return buf;
         return p;
     }
+    // translated code is slow: the 32-bit zygote starts without its minutes of class preloading
+    if (g_is32 && seq(n, "/system/etc/preloaded-classes")) memcpy(n, "/proc/.task1/none", 18);
     if (pre(n, "/dev/") && host_dev(n + 5)) return p;
     if (g_props[0] && seq(n, "/dev/__properties__")) return g_props;
     if (pre(n, g_root) && (n[g_rootlen] == '/' || !n[g_rootlen])) return p;   // already a host path (our own argv)
@@ -529,6 +547,15 @@ static long trap2(long nr, long *a, void *uc, char **pbp) {
         }
         if (!a[1]) return S4(nr, a[0], 0, a[2], a[3]);
         t = *(struct ksa *)a[1]; t.mask &= ~SYSBIT;
+        if (g_is32 && (u64)t.h > 1 && a[0] > 0 && a[0] < 65) {     // qemu's handlers leave through relay32
+            void *want = t.h, *prev = (void *)g_h32[a[0]];
+            t.h = (void *)relay32; t.flags |= 4;
+            struct ksa old;
+            long r = S4(nr, a[0], &t, &old, a[3]);
+            if (r == 0) g_h32[a[0]] = want;
+            if (r == 0 && a[2]) { if (old.h == (void *)relay32) old.h = prev; *(struct ksa *)a[2] = old; }
+            return r;
+        }
         return S4(nr, a[0], &t, a[2], a[3]);
     }
     }
@@ -605,6 +632,7 @@ static void on_crash(int sig, void *info, void *uc) {
 static void fatal_relay(int sig, void *info, void *uc) {
     void (*h)(int, void *, void *) = g_fatal[sig & 31];
     if ((u64)h > 1) h(sig, info, uc); else on_crash(sig, info, uc);
+    if (g_is32) *(u64 *)((char *)uc + 40) &= ~SYSBIT;
 }
 
 static void on_sigsys(int sig, void *info, void *uc) {
@@ -830,7 +858,7 @@ void aemu_main(u64 *sp) {
         memcpy(progcopy, prog, slen(prog) + 1);
         qargv[k++] = g_qemu; qargv[k++] = "-B"; qargv[k++] = "0"; qargv[k++] = "-0"; qargv[k++] = (char *)argv0; qargv[k++] = progcopy;
         for (long i = 1; i < gargc && k < 4096; i++) qargv[k++] = gargv[i];
-        qargv[k] = 0; gargv = qargv; gargc = k; argv0 = g_qemu; prog = g_qemu; is32 = 1;
+        qargv[k] = 0; gargv = qargv; gargc = k; argv0 = g_qemu; prog = g_qemu; is32 = 1; g_is32 = 1;
     }
     // each world has its own libraries
     static char ldpath[64];
