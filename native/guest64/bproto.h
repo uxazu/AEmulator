@@ -13,6 +13,7 @@
 #define F_BIG 4         /* payload travels in a memfd (the first descriptor of the message) */
 #define F_TXN 8         /* d_hdr describes a transaction */
 #define F_AGAIN 16      /* nothing to read */
+#define F_WAKE 32       /* no content: makes the descriptor readable for a thread that polls it */
 
 #define INLINE_MAX 49152
 

@@ -21,6 +21,8 @@ class InputService(private val paths: VmPaths, private val log: (String) -> Unit
     private val clients = CopyOnWriteArrayList<Client>()
     @Volatile var rateHz = 60
     @Volatile var mtMode = 0
+    /** events for a 64-bit guest (native arm64 engine) */
+    @Volatile var wide = false
     @Volatile var sent = 0L
         private set
     val connected: Int get() = clients.size
@@ -191,8 +193,13 @@ class InputService(private val paths: VmPaths, private val log: (String) -> Unit
         b.flip(); b.get(a); b.clear()
         sink?.let { runCatching { it.write(a); it.flush() }.onFailure { sink = null } }
         val dead = ArrayList<Client>()
+        // a 64-bit guest reads struct input_event with a 16-byte timeval
+        val w = if (!wide) a else ByteArray(a.size / EV * 24).also { o ->
+            val src = ByteBuffer.wrap(a).order(ByteOrder.LITTLE_ENDIAN); val dst = ByteBuffer.wrap(o).order(ByteOrder.LITTLE_ENDIAN)
+            repeat(a.size / EV) { dst.putLong(src.int.toLong()); dst.putLong(src.int.toLong()); dst.putShort(src.short); dst.putShort(src.short); dst.putInt(src.int) }
+        }
         for (c in clients) {
-            try { c.out.write(a); c.out.flush() } catch (e: Exception) { dead.add(c) }
+            try { c.out.write(w); c.out.flush() } catch (e: Exception) { dead.add(c) }
         }
         if (dead.isNotEmpty()) clients.removeAll(dead.toSet())
         sent += a.size / EV

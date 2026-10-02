@@ -86,12 +86,12 @@ struct txn {
     u64 data_size, offsets_size; char *data; int memfd; int nfds, *fds; int nheld; struct held *held;
 };
 struct thread {
-    int fd, tid, is_main, waiting, nonblock, looper; u32 read_size;
+    int fd, tid, is_main, waiting, nonblock, looper, woken; u32 read_size;
     struct proc *proc; struct wq todo; struct txn *stack; struct thread *next;
 };
 #define NHASH 256
 struct proc {
-    int pid, max_threads, requested, started; struct thread *threads; struct wq todo;
+    int pid, max_threads, requested, started, kick; u32 key; struct thread *threads; struct wq todo;
     struct ref **refs; u32 nrefs; struct node *nodes[NHASH]; struct dbuf *bufs; struct proc *next;
 };
 
@@ -100,6 +100,7 @@ static struct node *ctx_mgr;
 /* the thread whose message is being handled: reference changes of its own objects are reported to it first,
  * before it can drop the object it has just sent (the driver does the same) */
 static struct thread *cur;
+static int kick_any;
 static int ep, verbose;
 
 static void logf_(const char *fmt, ...) {
@@ -124,7 +125,7 @@ static void node_work(struct node *n) {
     if ((weak && !n->has_weak) || (strong && !n->has_strong) || (!strong && n->has_strong) || (!weak && n->has_weak)) {
         struct work *w = mkwork(W_NODE); w->node = n; n->queued = 1;
         if (cur && cur->proc == n->owner) wq_push(&cur->todo, w);
-        else { wq_push(&n->owner->todo, w); kick_proc(n->owner); }
+        else { wq_push(&n->owner->todo, w); n->owner->kick = 1; kick_any = 1; }   /* delivered once the caller is done with the node */
     }
 }
 
@@ -280,6 +281,7 @@ static struct thread *ready_thread(struct proc *p) {
 static void kick_proc(struct proc *p) {
     struct thread *th;
     while (p->todo.head && (th = ready_thread(p))) deliver(th);
+    if (p->todo.head) for (th = p->threads; th; th = th->next) if (!th->waiting) deliver(th);
 }
 
 static void queue_txn(struct txn *t, struct thread *target) {
@@ -380,7 +382,14 @@ static int deliverable(struct thread *th) {
 }
 
 static void deliver(struct thread *th) {
-    if (!th->waiting) return;
+    if (!th->waiting) {
+        /* a looper that polls the descriptor instead of sitting in read (healthd): one empty message wakes it */
+        if ((th->looper & 2) && !th->woken && deliverable(th)) {
+            struct d_hdr h = { 0 }; h.flags = F_WAKE; th->woken = 1;
+            send(th->fd, &h, sizeof h, MSG_DONTWAIT | MSG_NOSIGNAL);
+        }
+        return;
+    }
     if (!deliverable(th)) {
         if (!th->nonblock) return;
         if (th->todo.head) { for (struct work *w = th->todo.head; w; w = w->next) w->deferred = 0; }
@@ -571,6 +580,13 @@ static void proc_release(struct proc *p) {
     free(p);
 }
 
+static void kick_pending(void) {
+    while (kick_any) {
+        kick_any = 0;
+        for (struct proc *q = procs; q; q = q->next) if (q->kick) { q->kick = 0; kick_proc(q); }
+    }
+}
+
 static void on_message(struct thread *th) {
     static char buf[INLINE_MAX + 4096 + 512];
     char cbuf[CMSG_SPACE(sizeof(int) * 254)];
@@ -581,6 +597,7 @@ static void on_message(struct thread *th) {
     if (n < 0 && (errno == EAGAIN || errno == EINTR)) return;
     if (n <= 0) {
         if (th->is_main && th->proc) proc_release(th->proc); else thread_release(th);
+        kick_pending();
         return;
     }
     int fds[254], nfds = 0;
@@ -593,10 +610,13 @@ static void on_message(struct thread *th) {
     if ((size_t)n < sizeof *h) return;
     if (h->op == OP_HELLO) {
         struct c_hello *m = (struct c_hello *)buf;
+        /* every open("/dev/binder") is a process of its own, as in the driver; its threads name it by pid + descriptor */
         struct proc *p = procs;
-        while (p && p->pid != (int)m->pid) p = p->next;
-        if (m->main && p) { proc_release(p); p = 0; }        /* the pid was reused before we saw the old one go */
-        if (!p) { p = zalloc(sizeof *p); p->pid = (int)m->pid; p->next = procs; procs = p; V("pid %d opened binder", p->pid); }
+        while (p && !(p->pid == (int)m->pid && p->key == m->pad)) p = p->next;
+        if (m->main || !p) {
+            p = zalloc(sizeof *p); p->pid = (int)m->pid; p->key = m->pad; p->next = procs; procs = p;
+            V("pid %d opened binder (fd %u)", p->pid, p->key);
+        }
         th->proc = p; th->tid = (int)m->tid; th->is_main = (int)m->main;
         th->next = p->threads; p->threads = th;
         return;
@@ -608,11 +628,12 @@ static void on_message(struct thread *th) {
     else if (h->op == OP_TXN && (size_t)n >= sizeof(struct c_txn)) { do_txn(th, (struct c_txn *)buf, buf + sizeof(struct c_txn), fds, nfds); nfds = 0; }
     for (int i = 0; i < nfds; i++) close(fds[i]);
     if (h->flags & F_READ) {
-        th->waiting = 1; th->nonblock = !!(h->flags & F_NONBLOCK); th->read_size = h->read_size;
+        th->woken = 0; th->waiting = 1; th->nonblock = !!(h->flags & F_NONBLOCK); th->read_size = h->read_size;
         deliver(th);
         if (th->waiting && !th->stack && !th->todo.head) kick_proc(th->proc);
     }
     cur = 0;
+    kick_pending();
 }
 
 int main(int argc, char **argv) {

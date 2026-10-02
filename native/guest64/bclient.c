@@ -3,7 +3,7 @@
 
 #include "bproto.h"
 
-enum { NR_pwrite64 = 68, NR_sched_yield = 124, NR_getpid = 172, NR_gettid = 178, NR_socket = 198, NR_sendmsg = 211, NR_recvmsg = 212 };
+enum { NR_pwrite64 = 68, NR_sched_yield = 124, NR_getpid = 172, NR_gettid = 178, NR_sendmsg = 211, NR_recvmsg = 212 };
 
 #define BINDER_WRITE_READ 0xc0306201u
 #define BINDER_SET_MAX_THREADS 0x40046205u
@@ -86,14 +86,14 @@ static int is_binder_fd(int fd) {
     return 0;
 }
 
-static long bconnect(int main_, int cloexec) {
+static long bconnect(int main_, int cloexec, int bfd) {
     long s = S3(NR_socket, 1, 5 /*SOCK_SEQPACKET*/ | (cloexec ? 02000000 : 0), 0);
     if (s < 0) return s;
     struct sockaddr_un sa; sa.family = 1;
     u64 l = slen(g_bsock); memcpy(sa.path, g_bsock, l + 1);
     long r = S3(NR_connect, s, &sa, 2 + l + 1);
     if (r < 0) { S1(NR_close, s); return r; }
-    struct c_hello m = { { OP_HELLO, 0, 0, (u32)g_uid }, (u32)S0(NR_getpid), (u32)S0(NR_gettid), (u32)main_, 0 };
+    struct c_hello m = { { OP_HELLO, 0, 0, (u32)g_uid }, (u32)S0(NR_getpid), (u32)S0(NR_gettid), (u32)main_, (u32)(main_ ? s : bfd) };
     struct iov v = { &m, sizeof m }; struct msgh mh = { 0, 0, &v, 1, 0, 0, 0 };
     S3(NR_sendmsg, s, &mh, 0x4000 /*MSG_NOSIGNAL*/);
     return s;
@@ -126,7 +126,7 @@ static long binder_open(long flags) {
         memset(g_bth, 0, sizeof g_bth); memset(g_bfds, 0, sizeof g_bfds);
         g_bmap = 0; g_block = 0; g_bpid = pid;
     }
-    long s = bconnect(1, (flags & 02000000) != 0);
+    long s = bconnect(1, (flags & 02000000) != 0, -1);
     if (s < 0) return s;
     for (int i = 0; i < 4; i++) if (!g_bfds[i]) { g_bfds[i] = (int)s + 1; break; }
     struct bth *t = bthread((int)s, 1);
@@ -134,8 +134,9 @@ static long binder_open(long flags) {
     return s;
 }
 
-static long binder_mmap(u64 len) {
-    u64 m = (u64)S6(NR_mmap, 0, len, 3, 0x22, -1, 0);
+static long binder_mmap(u64 addr, u64 len, long flags) {
+    // qemu-arm maps at an address of its choice (MAP_FIXED inside the guest's 4 GB): keep it
+    u64 m = (u64)S6(NR_mmap, addr, len, 3, 0x22 | (flags & 0x10), -1, 0);
     if (m >= (u64)-4095) return (long)m;
     block();
     struct bhdr *h = (struct bhdr *)m; h->size = len - sizeof *h; h->used = 0; h->big = 0;
@@ -195,7 +196,10 @@ static long bread(struct bth *t, struct bwr *w) {
     struct iov v[2] = { { &h, sizeof h }, { t->scratch, SCRATCH } };
     struct msgh mh = { 0, 0, v, 2, &cm, sizeof cm, 0 };
     long r;
-    do r = S3(NR_recvmsg, t->sock, &mh, 0x40000000 /*MSG_CMSG_CLOEXEC*/); while (r == -EINTR);
+    do {
+        mh.controllen = sizeof cm;
+        r = S3(NR_recvmsg, t->sock, &mh, 0x40000000 /*MSG_CMSG_CLOEXEC*/);
+    } while (r == -EINTR || (r >= (long)sizeof h && (h.flags & F_WAKE)));
     if (r < (long)sizeof h) return r < 0 ? r : -EBADF;
     if (h.flags & F_AGAIN) return -EAGAIN;
     int nfds = 0, *fds = cm.fd;
@@ -269,7 +273,7 @@ static long binder_ioctl(int fd, u32 cmd, u64 arg) {
     struct bth *t = bthread(fd, 1);
     if (!t) return -ENOMEM;
     if (!t->sock) {
-        long s = bconnect(0, 1);
+        long s = bconnect(0, 1, fd);
         if (s < 0) { t->tid = 0; return s; }
         t->sock = (int)s;
     }

@@ -301,8 +301,54 @@ class TreeFixer(
                 copied++
             }.onFailure { log("$n: ${it.message}") }
         }
+        // the Java stubs (bluetooth manager, network, tool runner) are dex code: the same jar as for 32-bit guests
+        runCatching {
+            val jar = File(root, "system/framework/aemu-stubs.jar")
+            val size = ctx.assets.openFd("engines/kk/aemu-stubs.jar").use { it.length }
+            if (!jar.isFile || jar.length() != size) {
+                ctx.assets.open("engines/kk/aemu-stubs.jar").use { i -> jar.outputStream().use { o -> i.copyTo(o) } }
+                jar.setReadable(true, false); copied++
+            }
+        }
         if (copied > 0) log("engine n64 files updated: $copied")
+        // qemu-arm (the firmware's 32-bit programs) asks for the lowest mappable address; the phone hides the real file
+        runCatching { File(root, "proc/sys/vm").mkdirs(); File(root, "proc/sys/vm/mmap_min_addr").writeText("65536") }
+        // the vendor's HALs drive hardware this phone does not have (ION, MDP, the SoC's audio DSP): with them
+        // aside, the loader falls back to the *.default ones
+        var parked = 0
+        for (dir in listOf("system/lib64/hw", "system/vendor/lib64/hw", "system/lib/hw", "system/vendor/lib/hw")) {
+            File(root, dir).listFiles()?.forEach { f ->
+                val id = f.name.substringBefore('.')
+                // (Qualcomm ships its location HAL as gps.default.so: no GPS at all is better than its modem worker)
+                if (!f.isFile || (f.name.endsWith(".default.so") && id != "gps") || id !in VENDOR_HALS) return@forEach
+                val dst = File(root, "system/.aemu-parked/${f.relativeTo(root).path.replace('/', '#')}")
+                dst.parentFile?.mkdirs()
+                if (dst.exists()) dst.delete()
+                if (f.renameTo(dst)) parked++
+            }
+        }
+        // Qualcomm location core loads its modem (QMI) back end by name and crashes inside it without a modem;
+        // with the back end gone it keeps its built-in do-nothing one
+        for (rel in listOf("system/lib64/libloc_api_v02.so", "system/vendor/lib64/libloc_api_v02.so", "system/lib/libloc_api_v02.so", "system/vendor/lib/libloc_api_v02.so")) {
+            val f = File(root, rel)
+            if (!f.isFile) continue
+            val dst = File(root, "system/.aemu-parked/${rel.replace('/', '#')}")
+            dst.parentFile?.mkdirs()
+            if (f.renameTo(dst)) parked++
+        }
+        // the vendor's RenderScript driver goes straight to its GPU; without it libRS computes on the CPU
+        for (dir in listOf("system/lib64", "system/vendor/lib64", "system/lib", "system/vendor/lib")) {
+            File(root, dir).listFiles()?.filter { it.name.startsWith("libRSDriver_") }?.forEach { f ->
+                val dst = File(root, "system/.aemu-parked/${f.relativeTo(root).path.replace('/', '#')}")
+                dst.parentFile?.mkdirs()
+                if (f.renameTo(dst)) parked++
+            }
+        }
+        if (parked > 0) log("vendor HALs set aside: $parked")
     }
+
+    private val VENDOR_HALS = setOf("gralloc", "hwcomposer", "copybit", "lights", "sensors", "audio", "power", "memtrack",
+        "camera", "gps", "fingerprint", "gxfingerprint", "consumerir", "bluetooth", "nfc", "vibrator", "keystore", "gatekeeper")
 
     private fun installEngineFiles() {
         val copies = when (engine) {

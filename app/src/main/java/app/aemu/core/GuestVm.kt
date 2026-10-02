@@ -17,6 +17,11 @@ import java.util.concurrent.CopyOnWriteArrayList
  * (MIUI installd dies in the LBE security hook on start). */
 private val ALWAYS_RESTART = setOf("mediaserver", "installd", "netd", "keystore")
 
+/** Native arm64 engine: vendor daemons that only poll hardware the phone does not have (modem, DSP, TrustZone). */
+private val N64_SKIP = setOf("audiod", "ATFWD-daemon", "imsqmidaemon", "loc_launcher", "cnd", "dpmd", "cnss-daemon",
+    "tftp_server", "qcom-system-daemon", "hvdcp_opti", "pm-service", "mtd", "mlipayd", "vsimd", "fdpp", "perfd", "ipacm",
+    "qti", "netmgrd", "port-bridge", "ims_rtp_daemon", "imsdatadaemon", "wcnss_service", "msm_irqbalance", "energy-awareness")
+
 /**
  * Одна запущенная виртуальная машина. Живёт в процессе :vm (одна на процесс: GL-мост нельзя
  * поднять дважды), заменяет собой init: готовит дерево, поднимает службы хоста (свойства, ввод,
@@ -216,6 +221,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         overrides["ro.kernel.qemu"] = if (engine == Engine.GB) "0" else "1"
         overrides["ro.kernel.qemu.gles"] = if (s.gpu && (s.hwui || engine == Engine.GB)) "1" else "0"
         overrides["qemu.gles"] = if (s.gpu) "1" else "0"
+        if (engine == Engine.N64) {             // software rendering until the engine's own GL stack is in
+            overrides["ro.kernel.qemu.gles"] = "0"; overrides["qemu.gles"] = "0"
+        }
         // 7.0+ libEGL ignores egl.cfg and takes the first libGLES_*.so it finds; without the bridge: the software one
         if (img.api >= 24 && !s.gpu) {
             overrides["ro.hardware.egl"] = "android"
@@ -249,7 +257,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // ART first boot compiles every app with dex2oat under qemu (minutes, single-threaded): by default only
         // skip it (verify-none: ART verifies classes lazily when an app runs) and use several threads; "full compilation" in the settings keeps machine code
         if (img.api >= 21) {
-            if (!s.fullDexopt && engine != Engine.N64) overrides["dalvik.vm.dex2oat-filter"] = "verify-none"
+            // (the native arm64 engine too: dex2oat is a 32-bit program there and runs translated; the boot image is
+            // still compiled in full, it has its own filter)
+            if (!s.fullDexopt) overrides["dalvik.vm.dex2oat-filter"] = "verify-none"
             // 7.0+: PackageManager picks the filter per reason from pm.dexopt.*
             if (img.api >= 24 && !s.fullDexopt && engine != Engine.N64) for (r in listOf("first-boot", "boot", "install", "bg-dexopt", "ab-ota", "core-app", "forced-dexopt", "nsys-library"))
                 overrides["pm.dexopt.$r"] = "verify-none"
@@ -292,6 +302,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         props.serve()
         input.rateHz = s.touchHz
         input.mtMode = s.mtMode
+        input.wide = engine == Engine.N64
         input.serve()
         frames.serve()
         if (s.radio) ril.serve() else log("radio: emulation disabled in settings")
@@ -362,14 +373,14 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 glUp(); glDone = true
             }
             // 4.2+: заглушка bluetooth_manager до зиготы (system_server с ro.kernel.qemu=1 свою не поднимает)
-            if (svc.name == "zygote" && img.api >= 9 && engine == Engine.KK && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
+            if (svc.name == "zygote" && img.api >= 9 && engine != Engine.GB && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 // 2.3–4.1 look up "bluetooth" instead; without it BluetoothAdapter is null and the vendor's Bluetooth apps crash
                 val btName = if (img.api >= 17) "bluetooth_manager" else "bluetooth"
                 startService(GuestService("aemu-bt", listOf("/system/bin/app_process",
                     "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.BtStub", btName), optional = true))
             }
             // 5.0–7.x: a registered network, otherwise ConnectivityService says "no active network" and browsers stay offline
-            if (svc.name == "zygote" && img.api in 21..25 && engine == Engine.KK && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
+            if (svc.name == "zygote" && img.api in 21..25 && engine != Engine.GB && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 synchronized(procs) { procs.remove("aemu-net") }?.let { runCatching { it.destroyForcibly() } }
                 startService(GuestService("aemu-net", listOf("/system/bin/app_process",
                     "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.NetStub"), optional = true))
@@ -442,6 +453,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             log("· ${svc.name}: ${svc.argv.first()} missing, skipping")
             return
         }
+        if (engine == Engine.N64 && (svc.name == "zygote_secondary" || svc.argv.first().substringAfterLast('/') in N64_SKIP)) return
         if (engine == Engine.N64 && !paths.nativeBin("libqemu_arm.so").canExecute() && !runsNatively(File(paths.root, svc.argv.first().removePrefix("/")))) {
             log("· ${svc.name}: 32-bit program, skipped by the native arm64 engine")
             return
