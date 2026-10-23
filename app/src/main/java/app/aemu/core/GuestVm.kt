@@ -27,8 +27,29 @@ private val N64_SKIP = setOf("audiod", "ATFWD-daemon", "imsqmidaemon", "loc_laun
  * поднять дважды), заменяет собой init: готовит дерево, поднимает службы хоста (свойства, ввод,
  * звук, заглушки радио и накопителя), binderd, GL-мост и службы гостя в порядке загрузки Android.
  */
-class GuestVm(val ctx: Context, val img: GuestImage) {
+class GuestVm(val ctx: Context, imgIn: GuestImage) {
     enum class State { STOPPED, PREPARING, BOOTING, RUNNING, FAILED, STOPPING }
+
+    val img: GuestImage = if (imgIn.settings.width == 0 || imgIn.settings.height == 0) {
+        val hw = hostScreen()
+        imgIn.copy(settings = imgIn.settings.copy(
+            width = (hw.first and 0x7ffffffe).coerceIn(240, 2160),
+            height = (hw.second and 0x7ffffffe).coerceIn(320, 3840),
+            density = if (imgIn.settings.density == 0) hw.third.coerceIn(96, 640) else imgIn.settings.density))
+    } else imgIn
+
+    private fun hostScreen(): Triple<Int, Int, Int> = runCatching {
+        val wm = ctx.getSystemService(android.view.WindowManager::class.java)
+            ?: return Triple(720, 1280, 320)
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            val b = wm.maximumWindowMetrics.bounds
+            Triple(b.width(), b.height(), ctx.resources.displayMetrics.densityDpi)
+        } else {
+            val p = android.graphics.Point()
+            @Suppress("DEPRECATION") wm.defaultDisplay.getRealSize(p)
+            Triple(p.x, p.y, ctx.resources.displayMetrics.densityDpi)
+        }
+    }.getOrDefault(Triple(720, 1280, 320))
 
     val paths = VmPaths(ctx, img.id)
     val kernel: Kernel64 get() = Kernel64.forApi(img.api)
@@ -113,6 +134,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     /** the phone's cameras for the guest (camera HAL → /dev/socket/aemu_cam) */
     val camera = CameraFeed(ctx, paths, ::log)
     @Volatile private var lmk: GuestLmk? = null
+    @Volatile private var batteryFollowOn = false
+    @Volatile private var batteryLast: Pair<Int, Boolean>? = null
+    private var batteryReceiver: android.content.BroadcastReceiver? = null
+    val batteryFollowing get() = batteryFollowOn
     val net = NetProxy(ctx, paths, ::log)
     private val dns = DnsProxy(paths, img.api, img.engine == Engine.N64 && Kernel64.forApi(img.api).dnsLayoutProbe, ::log)
     val runner by lazy { GuestRunner(paths, img) }
@@ -494,6 +519,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             if (kernel.ramBudget) f.writeText((GuestRunner.guestRamMb(img.api, s.ramMb) * 1024L).toString()) else f.delete()
         }
         lmk = GuestLmk(paths.root, s.lowRam, ::log, s.ramMb).also { it.start() }
+        if (s.batteryFollow) startBatteryFollow()
         val netCfg = if (s.netProxy) net.start() else GuestRunner.NetConfig()
         runner.sdcardHost = sd
         val r = GuestRunner(paths, img, netCfg.copy(glPath = if (s.gpu) "/dev/socket/gl" else null)).also {
@@ -950,8 +976,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         TreeFixer(ctx, paths, img, ::log).noScreenSleep()
         disableBrokenComponents()
         if (img.api >= 24) runCatching { enableHome() }.onFailure { log("home screen check failed: $it") }
-        val img2 =img.copy(lastBootMs = bootDoneAt - bootAt, bootCount = img.bootCount + 1)
-        ImageStore.save(ctx, img2)
+        ImageStore.update(ctx, img.id) {
+            it.copy(lastBootMs = bootDoneAt - bootAt, bootCount = it.bootCount + 1)
+        }
     }
 
     /**
@@ -1216,6 +1243,53 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     // ------------------------------------------------------------------ остановка
 
+    private fun readBattery(i: android.content.Intent?): Pair<Int, Boolean> {
+        val lvl = i?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = i?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val status = i?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val plugged = i?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        return (if (lvl >= 0 && scale > 0) lvl * 100 / scale else 100) to
+            (status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == android.os.BatteryManager.BATTERY_STATUS_FULL || plugged != 0)
+    }
+
+    fun hostBattery(): Pair<Int, Boolean> = runCatching {
+        readBattery(ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)))
+    }.getOrDefault(100 to true)
+
+    private fun applyBattery(b: Pair<Int, Boolean>) {
+        batteryLast = b
+        val ac = if (b.second) 1 else 0
+        Thread {
+            runCatching {
+                guestShell("echo ${b.first} > /sys/class/power_supply/battery/capacity 2>/dev/null; " +
+                    "echo $ac > /sys/class/power_supply/ac/online 2>/dev/null; " +
+                    "dumpsys battery set level ${b.first} 2>/dev/null; " +
+                    "dumpsys battery set ac $ac 2>/dev/null; " +
+                    "dumpsys battery set usb 0 2>/dev/null", 15_000)
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
+    fun startBatteryFollow() {
+        if (batteryFollowOn) return
+        batteryFollowOn = true
+        applyBattery(hostBattery())
+        batteryReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: android.content.Intent?) {
+                val b = readBattery(i)
+                if (b != batteryLast) applyBattery(b)
+            }
+        }.also { ctx.registerReceiver(it, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)) }
+        log("battery: following the host phone")
+    }
+
+    fun stopBatteryFollow() {
+        batteryFollowOn = false
+        batteryReceiver?.let { runCatching { ctx.unregisterReceiver(it) } }
+        batteryReceiver = null
+    }
+
     fun stop() {
         if (state == State.STOPPED) return
         stopping = true
@@ -1226,6 +1300,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         adb.stop(); props.stop(); input.stop(); frames.stop(); ril.stop(); vold.stop(); audio.stop(); net.stop(); dns.stop(); events.stop(); logd.stop(); lights.stop(); sensors.stop(); mic.stop(); camera.stop(); GlHost.stop()
         extraStubs.forEach { it.stop() }; extraStubs.clear()
         lmk?.stop(); lmk = null
+        stopBatteryFollow()
         Keeper.release(ctx)
         setState(State.STOPPED)
     }

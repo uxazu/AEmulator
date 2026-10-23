@@ -31,7 +31,7 @@ object Sdcard {
         }
         val all = (GUEST_PATHS + img.sdcardPath.trimStart('/')).distinct()
         // (the native arm64 engine maps the card inside its runner too: AEMU64_SDCARD)
-        for (rel in all + listOf("storage/self/primary", "mnt/user/0/primary")) placeholder(File(paths.root, rel))
+        for (rel in all + listOf("storage/self/primary", "mnt/user/0/primary")) link(File(paths.root, rel), d)
         for (rel in listOf("mnt/asec", "mnt/obb", "mnt/secure/asec")) File(paths.root, rel).mkdirs()
         runCatching { File(paths.bin, "sdcard.path").writeText(d.absolutePath + "\n") }
         log("sdcard: ${d.absolutePath} → guest sees ${img.sdcardPath}")
@@ -43,6 +43,11 @@ object Sdcard {
 
     fun hostDir(paths: VmPaths): File? =
         runCatching { File(File(paths.bin, "sdcard.path").readText().trim()) }.getOrNull()?.takeIf { it.isDirectory }
+
+    fun expose(ctx: Context, paths: VmPaths, img: GuestImage, log: (String) -> Unit) {
+        val d = hostDir(paths) ?: choose(ctx, img, log) ?: return
+        for (rel in guestPaths(img) + listOf("storage/self/primary", "mnt/user/0/primary")) link(File(paths.root, rel), d)
+    }
 
     private fun choose(ctx: Context, img: GuestImage, log: (String) -> Unit): File? {
         val safe = img.name.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_").take(40).ifBlank { img.id }
@@ -69,8 +74,7 @@ object Sdcard {
         ok
     }.getOrDefault(false)
 
-    /** В дереве гостя на месте точки монтирования должен быть обычный каталог (не ссылка). */
-    private fun link(f: File, target: File) {
+    internal fun link(f: File, target: File) {
         val p = f.toPath()
         if (Files.isSymbolicLink(p)) {
             if (runCatching { Os.readlink(f.absolutePath) }.getOrNull() == target.absolutePath) return
@@ -79,11 +83,5 @@ object Sdcard {
         else if (f.exists()) return                                           // the firmware's own content stays
         f.parentFile?.mkdirs()
         runCatching { Os.symlink(target.absolutePath, f.absolutePath) }
-    }
-
-    private fun placeholder(f: File) {
-        if (runCatching { Files.isSymbolicLink(f.toPath()) }.getOrDefault(false)) runCatching { Os.remove(f.absolutePath) }
-        else if (f.isFile) f.delete()
-        f.mkdirs()
     }
 }
