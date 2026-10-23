@@ -211,4 +211,21 @@
     <string name="m_vnc_started">VNC: %1$s, password %2$s</string>
     <string name="as_led">Notification light</string>
     <string name="as_led_sub">Show the guest phone’s LED above its screen</string>
+    <string name="imp_analyzing">Analyzing the firmware</string>
+    <string name="imp_building">Generating system.img from the OTA</string>
+    <string name="imp_building_p">Generating %1$s.img from the OTA</string>
+    <string name="imp_copying">Copying</string>
+    <string name="imp_copying_what">Copying %1$s</string>
+    <string name="imp_done">Done</string>
+    <string name="imp_extracting">Extracting: %1$s</string>
+    <string name="imp_file">%1$s: %2$s</string>
+    <string name="imp_opening">Opening %1$s</string>
+    <string name="imp_payload">Extracting %1$s from payload.bin</string>
+    <string name="imp_reading">Reading image %1$s (ext4, block size %2$s)</string>
+    <string name="imp_reading_any">Reading image %1$s (%2$s)</string>
+    <string name="imp_starting">Starting</string>
+    <string name="imp_unpacking">Unpacking %1$s</string>
+    <string name="m_battery_follow">Follow the phone</string>
+    <string name="vs_recovery_stock">Stock recovery</string>
+    <string name="vs_screen_follow">Match the phone</string>
 </resources>

@@ -3,6 +3,7 @@ package app.aemu.importer
 import android.content.Context
 import android.net.Uri
 import android.system.Os
+import app.aemu.R
 import app.aemu.core.GuestImage
 import app.aemu.core.ImageStore
 import app.aemu.core.TreeFixer
@@ -59,7 +60,7 @@ class Importer(
         root = paths.root
         root.mkdirs()
         try {
-            onProgress("Opening $name", 0f)
+            onProgress(ctx.getString(R.string.imp_opening, name), 0f)
             val pfd = ctx.contentResolver.openFileDescriptor(uri, "r") ?: throw IOException("file failed to open")
             pfd.use {
                 val ch = FileInputStream(pfd.fileDescriptor).channel
@@ -76,13 +77,13 @@ class Importer(
                 throw IOException("no Android system partition found in file")
             finishTree()
             recovery?.let { runCatching { RecoveryImage.install(paths, it, log) } }
-            onProgress("Analyzing firmware", 0.97f)
+            onProgress(ctx.getString(R.string.imp_analyzing), 0.97f)
             val img = Analyzer(ctx, paths, ramdisk).analyze(id, name)
             TreeFixer(ctx, paths, img, log).sanitize()
             ImageStore.save(ctx, img.copy(sizeBytes = ImageStore.du(paths.dir)))
-            onProgress("Done", 1f)
+            onProgress(ctx.getString(R.string.imp_done), 1f)
             log("import: $files files, ${bytes shr 20} MB")
-            return ImageStore.get(ctx, id)!!
+            return ImageStore.adopt(ctx, ImageStore.get(ctx, id)!!)
         } catch (t: Throwable) {
             ImageStore.delete(ctx, id)
             throw t
@@ -165,7 +166,7 @@ class Importer(
                         base.matches(SYSTEM_IMAGE) || base.matches(Regex("(?i).*\\.(zip|7z|tar|md5|tgz|gz|xz|pac|ftf|sin)")) && fh.fullUnpackSize > 20_000_000 ->
                             nested.add(a.getInputStream(fh).use { spill(it, base) } to base)
                     }
-                    onProgress("Extracting: $base", -1f)
+                    onProgress(ctx.getString(R.string.imp_extracting, base), -1f)
                 }
                 for ((f, base) in nested) {
                     try { FileChannel.open(f.toPath(), StandardOpenOption.READ).use { c -> handle(ChannelSource(c), c, base, depth + 1) } }
@@ -258,13 +259,13 @@ class Importer(
                 }
             }
             done += maxOf(0L, e.size)
-            onProgress("Extracting: $base", 0.9f * done / total)
+            onProgress(ctx.getString(R.string.imp_extracting, base), 0.9f * done / total)
         }
         if (datBr != null && !gotSystem) {
             val listName = datBr.name.substringBeforeLast("system.new.dat") + "system.transfer.list"
             val listE = entries.firstOrNull { it.name == listName } ?: throw IOException("system.transfer.list missing")
             val list = zip.getInputStream(listE).use { String(it.readBytes()) }
-            onProgress("Building system.img from OTA", 0.5f)
+            onProgress(ctx.getString(R.string.imp_building), 0.5f)
             val raw = File(tmp, "system.raw")
             zip.getInputStream(datBr).use { s ->
                 val data = if (datBr.name.endsWith(".br")) BrotliInputStream(BufferedInputStream(s, 1 shl 20)) else s
@@ -278,7 +279,7 @@ class Importer(
                 val pDat = entries.firstOrNull { it.name == datBr.name.replace("system.new.dat", "$p.new.dat") } ?: continue
                 val pList = entries.firstOrNull { it.name == listName.replace("system.transfer.list", "$p.transfer.list") } ?: continue
                 runCatching {
-                    onProgress("Building $p.img from OTA", 0.8f)
+                    onProgress(ctx.getString(R.string.imp_building_p, p), 0.8f)
                     zip.getInputStream(pDat).use { s ->
                         val data = if (pDat.name.endsWith(".br")) BrotliInputStream(BufferedInputStream(s, 1 shl 20)) else s
                         TransferList.build(zip.getInputStream(pList).use { String(it.readBytes()) }, data, raw)
@@ -320,7 +321,7 @@ class Importer(
                         !base.startsWith("MODEM") && !base.startsWith("CP_") && !base.contains("CSC") ->
                         nested.add(spill(stream, base) to "archive")
                 }
-                onProgress("Extracting: $base", 0.5f)
+                onProgress(ctx.getString(R.string.imp_extracting, base), 0.5f)
             }
             for ((f, kind) in nested) {
                 try {
@@ -441,7 +442,7 @@ class Importer(
                     }
                 }
             }
-            if (files % 200 == 0) onProgress("Extracting: $base", -1f)
+            if (files % 200 == 0) onProgress(ctx.getString(R.string.imp_extracting, base), -1f)
         }
     }
 
@@ -484,7 +485,7 @@ class Importer(
     }
 
     private fun importTree(tree: TreeSource, mount: String, kind: String) {
-        onProgress("Reading image $mount ($kind)", -1f)
+        onProgress(ctx.getString(R.string.imp_reading_any, mount, kind), -1f)
         var n = 0
         tree.walk { path, isDir, link, mode, size, data ->
             if (cancelled) throw IOException("cancelled")
@@ -501,7 +502,7 @@ class Importer(
                     files++; bytes += size
                 }
             }
-            if (++n % 150 == 0) onProgress("$mount: ${path.substringAfterLast('/')}", -1f)
+            if (++n % 150 == 0) onProgress(ctx.getString(R.string.imp_file, mount, path.substringAfterLast('/')), -1f)
         }
         if (mount == "system") { gotSystem = true; hoistSystemAsRoot() }
         log("image $mount ($kind): $n objects")
@@ -511,7 +512,7 @@ class Importer(
     private fun importSin(s: InputStream, base: String) {
         val raw = File(tmp, "${System.nanoTime()}-$base.img")
         try {
-            onProgress("Unpacking $base", -1f)
+            onProgress(ctx.getString(R.string.imp_unpacking, base), -1f)
             // the system partition is read out of the SIN itself (a copy of the SIN takes far less room than the
             // unpacked partition); the layouts that cannot be read in place are unpacked as before
             if (base.startsWith("system", true)) {
@@ -558,7 +559,7 @@ class Importer(
                 "product" to "system/product", "system_ext" to "system/system_ext") + extra.map { it to it }) {
             val img = File(tmp, "${System.nanoTime()}-$part.img")
             try {
-                val ok = PayloadReader.extractPartition(src, part, img) { p -> onProgress("Extracting $part from payload.bin", p) }
+                val ok = PayloadReader.extractPartition(src, part, img) { p -> onProgress(ctx.getString(R.string.imp_payload, part), p) }
                 if (!ok) { if (part == "system") throw IOException("payload.bin without a system partition"); continue }
                 FileChannel.open(img.toPath(), StandardOpenOption.READ).use { c ->
                     if (part == "system") importImage(ChannelSource(c), mount)
@@ -572,7 +573,7 @@ class Importer(
 
     private fun importExt4(src: RandomSource, mount: String) {
         val fs = Ext4Reader(src)
-        onProgress("Reading image $mount (ext4, block ${fs.blockSize})", -1f)
+        onProgress(ctx.getString(R.string.imp_reading, mount, fs.blockSize.toString()), -1f)
         var n = 0
         fs.walk { path, node ->
             if (cancelled) throw IOException("cancelled")
@@ -588,7 +589,7 @@ class Importer(
                     files++; bytes += node.size
                 }
             }
-            if (++n % 150 == 0) onProgress("$mount: ${path.substringAfterLast('/')}", -1f)
+            if (++n % 150 == 0) onProgress(ctx.getString(R.string.imp_file, mount, path.substringAfterLast('/')), -1f)
         }
         if (mount == "system") { gotSystem = true; hoistSystemAsRoot() }
         log("image $mount: $n objects")

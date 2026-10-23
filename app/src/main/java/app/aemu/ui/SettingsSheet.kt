@@ -1,6 +1,7 @@
 package app.aemu.ui
 
 import app.aemu.R
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -39,7 +41,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
 import app.aemu.core.CpuInfo
 import app.aemu.core.Engine
 import app.aemu.core.GuestImage
@@ -53,7 +54,7 @@ private val RESOLUTIONS = listOf(
     Res("720×1280", 720, 1280, 320),
 )
 
-private val RAM_STEPS = listOf(0, 256, 512, 768, 1024, 1536, 2048, 3072, 4096)
+private val RAM_STEPS = listOf(0, 256, 512, 768, 1024, 1536, 2048, 3072, 4096, 8192, 12288, 16384, 24576)
 
 @Composable
 fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -> Unit) {
@@ -70,19 +71,31 @@ fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -
             if (s.legacyEngine && img.api < 14) {
                 Text(stringResource(R.string.vs_fixed_2x), style = MaterialTheme.typography.bodyMedium)
             } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween), modifier = Modifier.fillMaxWidth()) {
+                val ctx = LocalContext.current
+                val (hostW, hostH, hostDpi) = remember {
+                    val hw = hostScreen(ctx)
+                    Triple((hw.first and 0x7ffffffe).coerceIn(240, 2160),
+                        (hw.second and 0x7ffffffe).coerceIn(320, 3840),
+                        hw.third.coerceIn(96, 640))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                     RESOLUTIONS.forEachIndexed { i, r ->
                         ToggleButton(
-                            checked = s.width == r.w && s.height == r.h,
+                            checked = s.width == r.w && s.height == r.h && s.density == r.dpi,
                             onCheckedChange = { s = s.copy(width = r.w, height = r.h, density = r.dpi) },
                             shapes = when (i) {
                                 0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                RESOLUTIONS.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
                                 else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
                             },
-                            modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                        ) { Text(r.label) }
+                            modifier = Modifier.semantics { role = Role.RadioButton },
+                        ) { Text(r.label, maxLines = 1, softWrap = false) }
                     }
+                    ToggleButton(
+                        checked = s.width == hostW && s.height == hostH && s.density == hostDpi,
+                        onCheckedChange = { s = s.copy(width = hostW, height = hostH, density = hostDpi) },
+                        shapes = ButtonGroupDefaults.connectedTrailingButtonShapes(),
+                        modifier = Modifier.semantics { role = Role.RadioButton },
+                    ) { Text(stringResource(R.string.vs_screen_follow), maxLines = 1, softWrap = false) }
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -192,18 +205,30 @@ internal fun Toggle(title: String, sub: String, on: Boolean, set: (Boolean) -> U
 
 @Composable
 private fun NumField(label: String, value: Int, modifier: Modifier, set: (Int) -> Unit) {
-    var text by remember(value) { mutableStateOf(value.toString()) }
-    OutlinedTextField(value = text, onValueChange = { v -> text = v.filter(Char::isDigit).take(4); text.toIntOrNull()?.let(set) },
+    OutlinedTextField(value = if (value == 0) "" else value.toString(),
+        onValueChange = { v -> v.filter(Char::isDigit).take(4).toIntOrNull()?.let(set) },
         label = { Text(label) }, singleLine = true, modifier = modifier,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
 }
+
+private fun hostScreen(ctx: android.content.Context): Triple<Int, Int, Int> = runCatching {
+    val wm = ctx.getSystemService(android.view.WindowManager::class.java) ?: return Triple(720, 1280, 320)
+    if (android.os.Build.VERSION.SDK_INT >= 30) {
+        val b = wm.maximumWindowMetrics.bounds
+        Triple(b.width(), b.height(), ctx.resources.displayMetrics.densityDpi)
+    } else {
+        val p = android.graphics.Point()
+        @Suppress("DEPRECATION") wm.defaultDisplay.getRealSize(p)
+        Triple(p.x, p.y, ctx.resources.displayMetrics.densityDpi)
+    }
+}.getOrDefault(Triple(720, 1280, 320))
 
 /** Recovery of this firmware: stock one from the import, or a custom recovery.img (TWRP, OrangeFox, CWM…). */
 @Composable
 private fun RecoverySection(img: GuestImage) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val paths = remember(img.id) { app.aemu.core.VmPaths(ctx, img.id) }
-    var status by remember { mutableStateOf(recoveryStatus(paths)) }
+    var status by remember { mutableStateOf(recoveryStatus(ctx, paths)) }
     var busy by remember { mutableStateOf(false) }
     val failed = stringResource(R.string.vs_recovery_failed)
     val pick = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -217,7 +242,7 @@ private fun RecoverySection(img: GuestImage) {
             }.getOrDefault(false)
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 busy = false
-                status = recoveryStatus(paths)
+                status = recoveryStatus(ctx, paths)
                 if (!ok) android.widget.Toast.makeText(ctx, failed, android.widget.Toast.LENGTH_LONG).show()
             }
         }.start()
@@ -233,7 +258,7 @@ private fun RecoverySection(img: GuestImage) {
     )
 }
 
-private fun recoveryStatus(paths: app.aemu.core.VmPaths): String? {
+private fun recoveryStatus(ctx: android.content.Context, paths: app.aemu.core.VmPaths): String? {
     if (!app.aemu.core.RecoveryImage.installed(paths)) return null
     val dir = app.aemu.core.RecoveryImage.dir(paths)
     val prop = runCatching { java.io.File(dir, "default.prop").readText() }.getOrDefault("")
@@ -243,6 +268,6 @@ private fun recoveryStatus(paths: app.aemu.core.VmPaths): String? {
         java.io.File(dir, "twres").isDirectory -> "TWRP"
         java.io.File(dir, "sbin/orangefox.sh").exists() || prop.contains("orangefox", true) -> "OrangeFox"
         prop.contains("cwm", true) || java.io.File(dir, "res/images/icon_clockwork.png").exists() -> "ClockworkMod"
-        else -> "Stock recovery"
+        else -> ctx.getString(R.string.vs_recovery_stock)
     }
 }

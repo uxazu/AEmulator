@@ -28,6 +28,10 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Gamepad
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -35,8 +39,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import kotlin.math.roundToInt
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -129,6 +137,7 @@ import app.aemu.core.GuestVm
 import app.aemu.core.ImageStore
 import app.aemu.core.InputService
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.thread
 
 /** Процесс :vm держит ровно одну машину. */
@@ -225,15 +234,16 @@ class VmActivity : ComponentActivity() {
             ins
         }
         root.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
-            val navPx = (navDp * resources.displayMetrics.density).toInt()
+            val full = gw >= r - l - 4 && gh >= b - t - 4
+            val navPx = if (full) 0 else (navDp * resources.displayMetrics.density).toInt()
             val aw = r - l
-            val ah = b - t - navPx - safeTop - safeBottom
+            val ah = b - t - navPx - if (full) 0 else (safeTop + safeBottom)
             if (aw <= 0 || ah <= 0) return@addOnLayoutChangeListener
             val scale = minOf(aw.toFloat() / gw, ah.toFloat() / gh)
             val w = (gw * scale).toInt()
             val h = (gh * scale).toInt()
             val lp = box.layoutParams as FrameLayout.LayoutParams
-            val top = safeTop + (ah - h) / 2
+            val top = if (full) 0 else safeTop + (ah - h) / 2
             if (guestTopPx != top) guestTopPx = top
             if (lp.width != w || lp.height != h || lp.topMargin != top) {
                 lp.width = w; lp.height = h
@@ -254,6 +264,7 @@ class VmActivity : ComponentActivity() {
         vm.onLog { line -> runOnUiThread { logLines.add(line); if (logLines.size > 400) logLines.removeRange(0, logLines.size - 400) } }
         guest.start()
         loadMenuOffset()
+        loadNavPos()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { vm.input.press(InputService.KEY_BACK) }
@@ -349,6 +360,7 @@ class VmActivity : ComponentActivity() {
         thread {
             vm.stop()
             VmHost.vm = null
+            runCatching { app.aemu.core.Sdcard.expose(this@VmActivity, vm.paths, vm.img) { } }
             runOnUiThread { finishAndRemoveTask() }
             Thread.sleep(300)
             // GL-мост нельзя поднять повторно в том же процессе — процесс :vm уходит вместе с машиной
@@ -363,6 +375,21 @@ class VmActivity : ComponentActivity() {
     private var menuOffset by mutableStateOf(Offset.Zero)
     private fun loadMenuOffset() { menuOffset = Offset(uiPrefs.getFloat("menu_x", 0f), uiPrefs.getFloat("menu_y", 0f)) }
     private fun saveMenuOffset() { uiPrefs.edit().putFloat("menu_x", menuOffset.x).putFloat("menu_y", menuOffset.y).apply() }
+
+    private var navDelta by mutableStateOf(Offset.Zero)
+    private var navIconPos by mutableStateOf(Offset.Zero)
+    private var navCollapsed by mutableStateOf(false)
+    private var navRect by mutableStateOf(Rect.Zero)
+    private fun loadNavPos() {
+        navCollapsed = uiPrefs.getBoolean("nav_collapsed", false)
+        navDelta = Offset(uiPrefs.getFloat("nav_dx", 0f), uiPrefs.getFloat("nav_dy", 0f))
+        navIconPos = Offset(uiPrefs.getFloat("nav_icon_x", 0f), uiPrefs.getFloat("nav_icon_y", 0f))
+    }
+    private fun saveNavPos() {
+        uiPrefs.edit().putBoolean("nav_collapsed", navCollapsed)
+            .putFloat("nav_dx", navDelta.x).putFloat("nav_dy", navDelta.y)
+            .putFloat("nav_icon_x", navIconPos.x).putFloat("nav_icon_y", navIconPos.y).apply()
+    }
 
     private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) vm.mic.permissionGranted() }
 
@@ -601,6 +628,7 @@ class VmActivity : ComponentActivity() {
     private fun BatteryDialog(onDone: () -> Unit) {
         var level by remember { mutableStateOf(80f) }
         var charging by remember { mutableStateOf(true) }
+        var follow by remember { mutableStateOf(vm.batteryFollowing) }
         // start from the guest's own battery state (sysfs or dumpsys)
         LaunchedEffect(Unit) {
             val cmd = "cat /sys/class/power_supply/battery/capacity 2>/dev/null; " +
@@ -624,13 +652,27 @@ class VmActivity : ComponentActivity() {
             text = {
                 Column {
                     Text("${level.toInt()}%")
-                    Slider(level, { level = it }, valueRange = 0f..100f)
+                    Slider(level, { level = it }, valueRange = 0f..100f, enabled = !follow)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.m_charging), Modifier.weight(1f)); Switch(charging, { charging = it })
+                        Text(stringResource(R.string.m_charging), Modifier.weight(1f)); Switch(charging, { charging = it }, enabled = !follow)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.m_battery_follow), Modifier.weight(1f))
+                        Switch(follow, { v ->
+                            follow = v
+                            if (v) {
+                                val hb = vm.hostBattery()
+                                level = hb.first.toFloat().coerceIn(0f, 100f)
+                                charging = hb.second
+                                vm.startBatteryFollow()
+                            } else vm.stopBatteryFollow()
+                            thread { ImageStore.update(this@VmActivity, vm.img.id) { it.copy(settings = it.settings.copy(batteryFollow = v)) } }
+                        })
                     }
                 }
             },
             confirmButton = { Button(onClick = {
+                if (follow) onDone() else {
                 val lvl = level.toInt()
                 val ac = if (charging) 1 else 0
                 val cmd = "echo $lvl > /sys/class/power_supply/battery/capacity 2>/dev/null; " +
@@ -640,6 +682,7 @@ class VmActivity : ComponentActivity() {
                     "dumpsys battery set usb 0 2>/dev/null"
                 guestAsync(cmd)
                 onDone()
+                }
             }) { Text(stringResource(R.string.m_apply)) } },
             dismissButton = { OutlinedButton(onClick = {
                 guestAsync("dumpsys battery reset 2>/dev/null")
@@ -689,6 +732,25 @@ class VmActivity : ComponentActivity() {
             val rtl = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
             fun clamp(o: Offset) = Offset(if (rtl) o.x.coerceIn(0f, maxX) else o.x.coerceIn(-maxX, 0f), o.y.coerceIn(0f, maxY))
             LaunchedEffect(maxX, maxY) { menuOffset = clamp(menuOffset) }
+            val navActive = remember { vm.settings.navKeys.split(',').any { it in app.aemu.core.VmSettings.NAV_ALL } } && vm.settings.showNavBar && !showLog && !showTerm
+            if (navActive && !navCollapsed) {
+                val dockPx = with(androidx.compose.ui.platform.LocalDensity.current) { 40.dp.toPx() }
+                Box(Modifier.fillMaxSize().pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (down.isConsumed) return@awaitEachGesture
+                        val x = down.position.x
+                        val y = down.position.y
+                        if (x < navRect.left || x > navRect.right || y < navRect.top || y > navRect.bottom) {
+                            down.consume()
+                            navCollapsed = true
+                            navIconPos = Offset((navRect.left + navRect.right - dockPx) / 2f,
+                                (navRect.top + navRect.bottom - dockPx) / 2f)
+                            saveNavPos()
+                        }
+                    }
+                })
+            }
             led?.takeIf { it.lit && showLed }?.let { LedIndicator(it, Modifier.align(Alignment.TopCenter)) }
             // карточка загрузки
             AnimatedVisibility(
@@ -801,19 +863,84 @@ class VmActivity : ComponentActivity() {
             }
 
             // панель кнопок Android
-            if (vm.settings.showNavBar && !showLog && !showTerm) {
-                NavBar(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = if (vm.settings.navSize == 0) 3.dp else 6.dp))
+            if (navActive) {
+                FloatingNavBar(Modifier.align(Alignment.BottomCenter), constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat())
             }
         }
     }
 
     /** The bar of guest buttons: the user's own set, each held down in the guest for as long as it is held here. */
     @Composable
-    private fun NavBar(modifier: Modifier) {
-        val compact = vm.settings.navSize == 0
+    private fun FloatingNavBar(base: Modifier, maxW: Float, maxH: Float) {
         val keys = remember { vm.settings.navKeys.split(',').filter { it in app.aemu.core.VmSettings.NAV_ALL } }
         if (keys.isEmpty()) return
-        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f), modifier = modifier) {
+        val compact = vm.settings.navSize == 0
+        var anchor by remember { mutableStateOf(Offset.Zero) }
+        var pill by remember { mutableStateOf(IntSize.Zero) }
+        val drawn = remember { arrayOf(Offset.Zero) }
+        val d = androidx.compose.ui.platform.LocalDensity.current
+        val margin = with(d) { 2.dp.toPx() }
+        val dock = with(d) { 40.dp.toPx() }
+        fun clampPill(p: Offset): Offset {
+            val w = pill.width.toFloat().coerceAtLeast(dock)
+            val h = pill.height.toFloat().coerceAtLeast(dock)
+            return Offset(p.x.coerceIn(margin, (maxW - w - margin).coerceAtLeast(margin)),
+                p.y.coerceIn(margin, (maxH - h - margin).coerceAtLeast(margin)))
+        }
+        LaunchedEffect(maxW, maxH) {
+            if (navIconPos == Offset.Zero) {
+                navIconPos = Offset((maxW - dock) / 2f, maxH - dock - margin * 6f)
+                saveNavPos()
+            }
+        }
+        if (navCollapsed) {
+            val c = Offset(navIconPos.x.coerceIn(margin, (maxW - dock - margin).coerceAtLeast(margin)),
+                navIconPos.y.coerceIn(margin, (maxH - dock - margin).coerceAtLeast(margin)))
+            Box(Modifier.offset { IntOffset(c.x.roundToInt(), c.y.roundToInt()) }
+                .pointerInput(Unit) {
+                    detectDragGestures(onDragEnd = { saveNavPos() }) { ch, dg ->
+                        ch.consume()
+                        navIconPos = Offset((navIconPos.x + dg.x).coerceIn(margin, (maxW - dock - margin).coerceAtLeast(margin)),
+                            (navIconPos.y + dg.y).coerceIn(margin, (maxH - dock - margin).coerceAtLeast(margin)))
+                    }
+                }) {
+                FilledTonalIconButton(onClick = {
+                    navCollapsed = false
+                    if (pill.width > 0) {
+                        val tx = (c.x + dock / 2 - pill.width / 2).coerceIn(margin, (maxW - pill.width - margin).coerceAtLeast(margin))
+                        val ty = (c.y + dock / 2 - pill.height / 2).coerceIn(margin, (maxH - pill.height - margin).coerceAtLeast(margin))
+                        navDelta = Offset(tx - anchor.x, ty - anchor.y)
+                    }
+                    saveNavPos()
+                }, modifier = Modifier.size(40.dp)) {
+                    val near = listOf(c.x + dock / 2, maxW - c.x - dock / 2, c.y + dock / 2, maxH - c.y - dock / 2)
+                    Icon(when (near.indexOf(near.min())) {
+                        0 -> Icons.Rounded.KeyboardArrowRight
+                        1 -> Icons.Rounded.KeyboardArrowLeft
+                        2 -> Icons.Rounded.KeyboardArrowDown
+                        else -> Icons.Rounded.KeyboardArrowUp
+                    }, null)
+                }
+            }
+            return
+        }
+        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.92f),
+            modifier = base.navigationBarsPadding()
+                .padding(bottom = if (compact) 3.dp else 6.dp)
+                .offset {
+                    val p = clampPill(Offset(anchor.x + navDelta.x, anchor.y + navDelta.y))
+                    val o = Offset(p.x - anchor.x, p.y - anchor.y)
+                    drawn[0] = o
+                    IntOffset(o.x.roundToInt(), o.y.roundToInt())
+                }
+                .onGloballyPositioned {
+                    val p = it.positionInRoot()
+                    pill = it.size; anchor = p - drawn[0]
+                    navRect = Rect(p.x, p.y, p.x + it.size.width, p.y + it.size.height)
+                }
+                .pointerInput(Unit) {
+                    detectDragGestures(onDragEnd = { saveNavPos() }, onDragCancel = { saveNavPos() }) { ch, d -> ch.consume(); navDelta += d }
+                }) {
             Row(Modifier.padding(horizontal = if (compact) 6.dp else 10.dp, vertical = if (compact) 2.dp else 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 4.dp)) {
                 for (k in keys) NavKey(k, if (compact) 36.dp else 48.dp)
@@ -825,7 +952,8 @@ class VmActivity : ComponentActivity() {
     private fun NavKey(k: String, size: androidx.compose.ui.unit.Dp) {
         var pressed by remember { mutableStateOf(false) }
         val bg by androidx.compose.animation.animateColorAsState(
-            if (pressed) MaterialTheme.colorScheme.primary.copy(alpha = 0.28f) else Color.Transparent, label = "key")
+            if (pressed) Color(0x26000000) else Color.Transparent, label = "key")
+        val iconTint = MaterialTheme.colorScheme.onSecondaryContainer
         val code = when (k) {
             "back" -> InputService.KEY_BACK; "home" -> InputService.KEY_HOME; "menu" -> InputService.KEY_MENU
             "search" -> InputService.KEY_SEARCH; "volup" -> InputService.KEY_VOLUMEUP; "voldown" -> InputService.KEY_VOLUMEDOWN
@@ -834,14 +962,35 @@ class VmActivity : ComponentActivity() {
         val step = with(androidx.compose.ui.platform.LocalDensity.current) { 18.dp.toPx() }
         Box(Modifier.size(size).background(bg, CircleShape).pointerInput(k) {
             awaitEachGesture {
-                val down = awaitFirstDown()
-                pressed = true
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val slop = viewConfiguration.touchSlop
                 val t0 = android.os.SystemClock.uptimeMillis()
+                var acc = Offset.Zero
+                var moved = false
+                var hold = k == "dpad"
+                var tap = false
+                while (!hold && !tap) {
+                    val e = withTimeoutOrNull(120) { awaitPointerEvent() } ?: run { hold = true; break }
+                    val c = e.changes.firstOrNull { it.id == down.id } ?: run { hold = true; break }
+                    if (c.isConsumed) break
+                    val dx = c.position.x - down.position.x
+                    val dy = c.position.y - down.position.y
+                    if (dx * dx + dy * dy > slop * slop) break
+                    if (!c.pressed) tap = true
+                }
+                if (tap) {
+                    when (k) {
+                        "home" -> vm.input.press(InputService.KEY_HOME, 60)
+                        "recents" -> vm.input.recents(vm.img.api, vm.img.skin)
+                        else -> if (code != 0) vm.input.press(code, 60)
+                    }
+                    return@awaitEachGesture
+                }
+                if (!hold) return@awaitEachGesture
+                pressed = true
                 if (k == "home") vm.input.home(true)
                 else if (code != 0) vm.input.key(code, true)
                 // the D-pad button is a little trackball: sliding the finger sends arrows, a tap selects
-                var acc = Offset.Zero
-                var moved = false
                 while (true) {
                     val e = awaitPointerEvent()
                     val c = e.changes.firstOrNull { it.id == down.id } ?: break
@@ -871,15 +1020,15 @@ class VmActivity : ComponentActivity() {
             val d = navKeyLabel(k)
             val m = Modifier.size(if (size < 40.dp) 20.dp else 24.dp)
             when (k) {
-                "back" -> Icon(Icons.AutoMirrored.Rounded.ArrowBack, d, m)
-                "home" -> Icon(Icons.Rounded.Circle, d, m)
-                "recents" -> Icon(Icons.Rounded.CropSquare, d, m)
-                "menu" -> Icon(Icons.Rounded.Menu, d, m)
-                "search" -> Icon(Icons.Rounded.Search, d, m)
-                "volup" -> Icon(Icons.Rounded.VolumeUp, d, m)
-                "voldown" -> Icon(Icons.Rounded.VolumeDown, d, m)
-                "power" -> Icon(Icons.Rounded.PowerSettingsNew, d, m)
-                else -> Icon(Icons.Rounded.Gamepad, d, m)
+                "back" -> Icon(Icons.AutoMirrored.Rounded.ArrowBack, d, m, tint = iconTint)
+                "home" -> Icon(Icons.Rounded.Circle, d, m, tint = iconTint)
+                "recents" -> Icon(Icons.Rounded.CropSquare, d, m, tint = iconTint)
+                "menu" -> Icon(Icons.Rounded.Menu, d, m, tint = iconTint)
+                "search" -> Icon(Icons.Rounded.Search, d, m, tint = iconTint)
+                "volup" -> Icon(Icons.Rounded.VolumeUp, d, m, tint = iconTint)
+                "voldown" -> Icon(Icons.Rounded.VolumeDown, d, m, tint = iconTint)
+                "power" -> Icon(Icons.Rounded.PowerSettingsNew, d, m, tint = iconTint)
+                else -> Icon(Icons.Rounded.Gamepad, d, m, tint = iconTint)
             }
         }
     }
