@@ -210,4 +210,21 @@
     <string name="m_vnc">启动 VNC 服务器</string>
     <string name="m_vnc_stop">停止 VNC 服务器</string>
     <string name="m_vnc_started">VNC：%1$s，密码 %2$s</string>
+    <string name="imp_analyzing">正在分析固件</string>
+    <string name="imp_building">正在从 OTA 生成 system.img</string>
+    <string name="imp_building_p">正在从 OTA 生成 %1$s.img</string>
+    <string name="imp_copying">正在复制</string>
+    <string name="imp_copying_what">正在复制 %1$s</string>
+    <string name="imp_done">完成</string>
+    <string name="imp_extracting">正在解压：%1$s</string>
+    <string name="imp_file">%1$s：%2$s</string>
+    <string name="imp_opening">正在打开 %1$s</string>
+    <string name="imp_payload">正在从 payload.bin 提取 %1$s</string>
+    <string name="imp_reading">正在读取镜像 %1$s（ext4，块大小 %2$s）</string>
+    <string name="imp_reading_any">正在读取镜像 %1$s（%2$s）</string>
+    <string name="imp_starting">开始</string>
+    <string name="imp_unpacking">正在解包 %1$s</string>
+    <string name="m_battery_follow">跟随手机</string>
+    <string name="vs_recovery_stock">官方 Recovery</string>
+    <string name="vs_screen_follow">匹配手机</string>
 </resources>

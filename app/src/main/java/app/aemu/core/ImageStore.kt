@@ -66,6 +66,98 @@ object ImageStore {
         wipe(VmPaths(ctx, id).dir)
     }
 
+    fun dirBase(img: GuestImage): String = if (img.baseId.isNotEmpty()) img.name else img.skin.ifBlank { "AOSP" }
+
+    fun sanitizeDir(s: String): String = s.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), " ")
+        .replace(Regex("\\s+"), " ").trim().trim('.', ' ').take(48).trim('.', ' ')
+
+    fun adopt(ctx: Context, img: GuestImage): GuestImage {
+        val base = sanitizeDir(dirBase(img))
+        if (base.isEmpty() || base == img.id) return img
+        val from = VmPaths(ctx, img.id)
+        if (!from.dir.isDirectory) return img
+        val images = imagesDir(ctx)
+        var desired = ""
+        if (!File(images, base).exists()) desired = base
+        else for (n in 2..99) {
+            val c = File(images, "$base $n")
+            if (!c.exists() || c == from.dir) { desired = "$base $n"; break }
+        }
+        if (desired.isEmpty() || desired == img.id) return img
+        val target = File(images, desired)
+        if (!from.dir.renameTo(target)) return img
+        moveSdcard(ctx, img, desired, target)
+        val renamed = img.copy(id = desired)
+        save(ctx, renamed)
+        return renamed
+    }
+
+    private fun moveSdcard(ctx: Context, img: GuestImage, newId: String, dir: File) {
+        val safe = img.name.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_").take(40).ifBlank { img.id }
+        val moves = ArrayList<Pair<File, File>>()
+        runCatching {
+            if (android.os.Environment.getExternalStorageState() == android.os.Environment.MEDIA_MOUNTED) {
+                val share = File(android.os.Environment.getExternalStorageDirectory(), "AEmulator")
+                moves.add(File(share, "$safe (${img.id})") to File(share, "$safe ($newId)"))
+            }
+        }
+        ctx.getExternalFilesDir(null)?.let { moves.add(File(it, "sdcard-${img.id}") to File(it, "sdcard-$newId")) }
+        moves.add(File(ctx.filesDir, "sdcard-${img.id}") to File(ctx.filesDir, "sdcard-$newId"))
+        var moved = ""
+        for ((a, b) in moves) if (a.isDirectory && !b.exists() && a.renameTo(b)) moved = b.path
+        if (moved.isNotEmpty()) {
+            val sp = File(File(dir, "run"), "sdcard.path")
+            if (sp.isFile) runCatching { sp.writeText(moved + "\n") }
+        }
+    }
+
+    private fun fixLink(ctx: Context, f: File, map: Map<String, String>) {
+        if (!runCatching { android.system.OsConstants.S_ISLNK(android.system.Os.lstat(f.path).st_mode) }.getOrDefault(false)) return
+        val t = runCatching { android.system.Os.readlink(f.path) }.getOrNull() ?: return
+        var nt = t
+        for ((o, n) in map) {
+            nt = nt.replace(File(imagesDir(ctx), o).path, File(imagesDir(ctx), n).path)
+            nt = nt.replace("sdcard-$o", "sdcard-$n")
+            nt = nt.replace(" ($o)", " ($n)")
+        }
+        if (nt != t) runCatching { android.system.Os.remove(f.path); android.system.Os.symlink(nt, f.path) }
+    }
+
+    fun vmProcessAlive(pkg: String): Boolean {
+        val procs = java.io.File("/proc").listFiles() ?: return true
+        for (p in procs) {
+            if (p.name.toIntOrNull() == null) continue
+            val cl = runCatching { java.io.File(p, "cmdline").readText() }.getOrNull() ?: continue
+            if (cl.split('\u0000').any { it == "$pkg:vm" }) return true
+        }
+        return false
+    }
+
+    fun migrateLegacy(ctx: Context) {
+        if (vmProcessAlive(ctx.packageName)) return
+        runCatching {
+            val imgs = list(ctx)
+            val map = HashMap<String, String>()
+            for (img in imgs) {
+                val moved = adopt(ctx, img)
+                if (moved.id != img.id) map[img.id] = moved.id
+            }
+            for (img in imgs) {
+                var changed = false
+                var cur = img
+                map[img.id]?.let { cur = cur.copy(id = it); changed = true }
+                if (img.baseId.isNotEmpty()) map[img.baseId]?.let { if (cur.baseId != it) { cur = cur.copy(baseId = it); changed = true } }
+                val p = VmPaths(ctx, cur.id)
+                fixLink(ctx, File(p.root, "system"), map)
+                fixLink(ctx, File(File(p.dir, "recovery"), "system"), map)
+                fixLink(ctx, File(File(p.dir, "recovery"), "data"), map)
+                fixLink(ctx, File(File(p.dir, "recovery"), "sdcard"), map)
+                Sdcard.expose(ctx, p, cur) { }
+                if (changed) save(ctx, cur)
+            }
+        }
+    }
+
     /**
      * New container of [src]'s firmware: a full own copy of the root including /system (flashing in one container
      * never touches another), a fresh /data (factory reset: apps, settings and accounts start empty; dalvik-cache is kept
@@ -120,7 +212,7 @@ object ImageStore {
                 createdAt = System.currentTimeMillis(),
                 lastBootMs = 0, bootCount = 0, sizeBytes = du(to.dir))
             save(ctx, img)
-            return img
+            return adopt(ctx, img)
         } catch (t: Throwable) {
             wipe(to.dir)
             throw t
